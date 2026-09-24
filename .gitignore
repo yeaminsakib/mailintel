@@ -1,0 +1,7 @@
+.env
+*.eml
+__pycache__/
+venv/
+test_emails/
+data/
+Project/
