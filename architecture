@@ -1,0 +1,223 @@
+mailintel/
+├── app/                 # PyQt6 UI only (no business logic)
+├── core/
+│   ├── parser/          # eml_parser.py, headers.py, attachments.py, urls.py
+│   ├── ioc/             # extractors, normalization, defang, whitelist policy
+│   ├── enrichment/      # virustotal.py, abuseipdb.py, urlhaus.py, otx.py, geoip.py, rdap.py, cache.py
+│   ├── scoring/         # risk_score.py (explainable)
+│   ├── correlation/     # campaign clustering, graph builder
+│   ├── mapping/         # mitre_attack.py
+│   ├── export/          # csv, json, stix21, pdf report
+│   └── storage/         # SQLite (SQLAlchemy or sqlite3), migrations
+├── tests/               # pytest + sample eml corpus
+├── data/                # whitelist.yaml, mitre_map.yaml
+├── docs/                # architecture, threat model, evaluation
+├── cli.py               # headless mode: mailintel scan ./folder --enrich
+└── Dockerfile, pyproject.toml, .github/workflows/ci.yml
+
+
+
+I've read all three files (`main.py`, `ioc_engine.py`, `ui_dashboard.py`). Here's an honest review, then the roadmap, then the prompts.
+
+## 1. Review of your current code
+
+**What's good:** the backend and UI are cleanly separated, you filter private IPs, you have a domain whitelist, and the dark theme and layout look professional.
+
+**What an examiner or a corporate reviewer would flag:**
+
+1. **You regex the raw file text instead of parsing the email.** Bodies in base64 or quoted-printable, HTML links, and attachments are all missed. Use Python's `email` package with `policy.default`, walk the MIME parts, decode them, and pull URLs from `href`/`src`.
+2. **There's no header intelligence.** Real DFIR work needs `From` vs `Reply-To` vs `Return-Path` mismatches, the `Received` chain (the first external hop is the real sender IP), and SPF/DKIM/DMARC results from `Authentication-Results`. Right now your own mail server's IPs and sender IPs are all mixed together.
+3. **The "hashes" are just 32-hex strings found in text.** They aren't hashes of attachments. Real IOCs are the SHA-256/MD5/SHA-1 of decoded attachments.
+4. **Fake data can appear as real.** `DEFAULT_IOC_DATA` is shown when a folder is empty, and the KPI cards fall back to `142`, `28`, `45` and `139.59.164.251`. In a forensic tool this is dangerous, so show an empty state instead. The Cases, Graph and Intel pages are also static mockups ("38 Linked Nodes…") and need to become real or be labelled as such.
+5. **`handle_test_vt_key` simulates the API.** It reports "HTTP 200 OK" based only on key length. Replace it with a real call, and never store the key in plain text (use `keyring` or an environment variable).
+6. **Storage isn't cumulative.** Each run creates a new `case_YYYYMMDD` folder and CSV. You said you want all mail stored every time, so use SQLite as the source of truth (deduplicated by the file's SHA-256) and export CSV from it.
+7. **Parsing runs on the UI thread**, so the window freezes on big folders. Use a `QThread`/worker with a progress bar.
+8. **The domain regex matches filenames** like `invoice.pdf` or `payload.exe`, and the whitelist blindly trusts `amazonaws.com`, `sendgrid.net`, `googleapis.com` and similar. Attackers abuse exactly these services. Whitelist by context, not by blanket.
+9. **Severity comes from frequency only.** That isn't risk. It should be a scored model (see the scoring engine below).
+10. **Small issues:** `handle_select_and_analyze` is duplicated in `main.py` and `ui_dashboard.py`, the `__import__("PyQt6.QtGui"...)` hack should be a normal `QColor` import, and there are no tests, no IPv6, and no URL or email-address IOCs.
+
+## 2. Target architecture
+
+```
+mailintel/
+├── app/                 # PyQt6 UI only (no business logic)
+├── core/
+│   ├── parser/          # eml_parser.py, headers.py, attachments.py, urls.py
+│   ├── ioc/             # extractors, normalization, defang, whitelist policy
+│   ├── enrichment/      # virustotal.py, abuseipdb.py, urlhaus.py, otx.py, geoip.py, rdap.py, cache.py
+│   ├── scoring/         # risk_score.py (explainable)
+│   ├── correlation/     # campaign clustering, graph builder
+│   ├── mapping/         # mitre_attack.py
+│   ├── export/          # csv, json, stix21, pdf report
+│   └── storage/         # SQLite (SQLAlchemy or sqlite3), migrations
+├── tests/               # pytest + sample eml corpus
+├── data/                # whitelist.yaml, mitre_map.yaml
+├── docs/                # architecture, threat model, evaluation
+├── cli.py               # headless mode: mailintel scan ./folder --enrich
+└── Dockerfile, pyproject.toml, .github/workflows/ci.yml
+```
+
+The main design point is that the **core is a library and the GUI is just one client**. That gives you a CLI, tests and CI, and it is what makes the project look corporate-grade.
+
+## 3. Roadmap by phase
+
+**Phase 1: solid foundation (week 1–2)**
+- Proper MIME parser, header analysis, attachment hashing (SHA-256/MD5/SHA-1), URL extraction, defanged display
+- SQLite schema: `emails`, `iocs`, `email_iocs`, `enrichments`, `cases`
+- Cumulative storage with dedup, CSV export, remove all fake fallbacks
+- Background worker thread, pytest suite
+
+**Phase 2: enrichment (week 3–4)**
+- **VirusTotal v3** for IP, domain, URL and file hash lookups. The free tier is roughly 4 requests/minute and 500/day, so build a rate limiter and a **SQLite cache with TTL**.
+- **AbuseIPDB** for IP abuse confidence
+- **abuse.ch** (URLhaus, ThreatFox, MalwareBazaar) for malicious URLs, C2 and malware hashes. It needs a free auth key.
+- **AlienVault OTX** for pulses and campaign context
+- **IPinfo / ip-api / MaxMind GeoLite2** for country and ASN
+- **RDAP/WHOIS** for domain age (newly registered domains are a strong phishing signal)
+- Optional: urlscan.io, GreyNoise Community, Shodan
+
+Check each provider's current quota and terms before you design around them.
+
+**Phase 3: analysis that makes it MSc-level (week 5–7)**
+- **Explainable risk score (0–100):** combine VT detections, AbuseIPDB score, domain age, SPF/DKIM/DMARC failures, Reply-To mismatch, lookalike domain, executable or macro attachment, and frequency. Show *why* the score is what it is.
+- **Typosquat and homoglyph detection** (Levenshtein/`tldextract` against brand lists)
+- **MITRE ATT&CK mapping**, e.g. T1566.001 (attachment), T1566.002 (link), T1036 (masquerading), T1204 (user execution)
+- **Campaign clustering:** group emails that share IOCs, sender infrastructure or similar subjects (TF-IDF or fuzzy hash such as TLSH). Draw the relationship graph with `networkx` (pyvis in a `QWebEngineView`, or a custom `QGraphicsScene`).
+- **YARA scanning** of attachments (static only, never execute anything)
+
+**Phase 4: corporate polish (week 8)**
+- **STIX 2.1 export** (`stix2` library) and a MISP-compatible JSON export
+- **PDF/HTML incident report** with a chain-of-custody section (file hashes, timestamps, analyst name)
+- Docker image for the CLI, GitHub Actions CI (pytest, ruff, mypy), and a README with screenshots
+- Whitelist and API settings in YAML, plus a structured audit log
+
+**Phase 5: research contribution**
+- Evaluate on public corpora such as the `phishing_pot` repository and the Nazario phishing corpus, plus SpamAssassin ham for negatives. Measure extraction precision/recall and how well the risk score separates phishing from ham (ROC/PR curves).
+- Tie back to your ML background: a small TF-IDF plus header-feature classifier (logistic regression or gradient boosting) compared against your rule-based score. This is a strong thesis chapter.
+
+**Safety rules to write in your docs:** never open or execute attachments, never fetch suspicious URLs directly (only query APIs), and work on a VM with copies of the samples.
+
+## 4. Prompts for Antigravity
+
+Use **Opus 4.5** for Prompts 0–1 and 5 (architecture and scoring), and **Sonnet 4.6** for the rest. Put your three files in the workspace first. Run the prompts one at a time and test between them.
+
+**Prompt 0: project rules (save as your rules/context file)**
+```
+You are a senior security engineer helping me build "MailIntel", an MSc-level
+email DFIR / IOC extraction and enrichment tool (Python 3.11+, PyQt6, SQLite).
+Rules: (1) Business logic lives in `core/`, never in UI files. (2) Type hints
+and docstrings everywhere. (3) No fake or mock data is ever shown as real; empty
+states instead. (4) Never execute attachments or fetch suspicious URLs directly.
+(5) API keys come from `keyring` or env vars, never hardcoded or logged.
+(6) Every module gets pytest tests. (7) Before big changes, explain your plan
+and list files you will touch. Work in small, reviewable steps.
+```
+
+**Prompt 1: audit and restructure**
+```
+Read main.py, ioc_engine.py and ui_dashboard.py. Refactor into this package
+layout: app/, core/{parser,ioc,enrichment,scoring,correlation,mapping,export,storage},
+tests/, data/, cli.py, pyproject.toml. Move existing logic without changing
+behaviour first, then remove: DEFAULT_IOC_DATA fallbacks, hardcoded KPI defaults
+(142/28/45), and the duplicated handle_select_and_analyze. Fix the __import__
+QColor hack. Give me a migration summary and make sure the app still launches.
+```
+
+**Prompt 2: real email parser**
+```
+Implement core/parser using Python's `email` package with policy.default.
+Extract: headers (From, Reply-To, Return-Path, Subject, Date, Message-ID),
+the Received chain with the first external hop identified, SPF/DKIM/DMARC from
+Authentication-Results, plain and HTML bodies (decoded), all URLs (text + href
++ src), and every attachment with filename, MIME type, size, and
+SHA-256/SHA-1/MD5 computed from the decoded bytes (never executed). Handle
+malformed emails without crashing. Add IPv4/IPv6, URL, and email-address IOC
+extractors with defanging helpers. Whitelist policy must be context-aware and
+loaded from data/whitelist.yaml. Write pytest tests using synthetic .eml files.
+```
+
+**Prompt 3: SQLite storage and cumulative CSV**
+```
+Create core/storage with SQLite tables: emails (sha256 of file, filename,
+headers json, auth results, first_seen), iocs (type, value, first_seen,
+last_seen), email_iocs (many-to-many), enrichments (ioc_id, provider, raw json,
+fetched_at), cases. Deduplicate emails by file SHA-256 so re-scanning a folder
+never duplicates rows. Add export_csv() that writes ALL stored emails to one
+cumulative CSV plus per-case exports. Add a QThread worker so scanning and DB
+writes never block the UI, with a progress bar and cancel button.
+```
+
+**Prompt 4: enrichment layer**
+```
+Create core/enrichment with an abstract Provider interface and implementations
+for VirusTotal v3, AbuseIPDB, abuse.ch (URLhaus/ThreatFox/MalwareBazaar),
+AlienVault OTX, and RDAP (domain age). Requirements: per-provider rate limiter,
+SQLite cache with TTL, exponential backoff on 429/5xx, timeouts, and a
+normalized result schema (verdict, score, tags, raw). Store keys with `keyring`.
+Replace the fake handle_test_vt_key in the Config page with a real test call
+that shows the true HTTP status. Mock all HTTP in tests (use `responses` or
+`respx`). Never crash if a provider is down.
+```
+
+**Prompt 5: explainable scoring and ATT&CK**
+```
+Implement core/scoring/risk_score.py: a 0-100 risk score per IOC and per email
+combining VT detections, AbuseIPDB confidence, domain age, SPF/DKIM/DMARC
+failures, Reply-To/From mismatch, lookalike/typosquat domain (Levenshtein +
+homoglyph check against a brand list in data/), dangerous attachment types and
+macro indicators, and IOC frequency. Weights live in YAML. Return a breakdown
+list of (factor, points, reason) so the UI can explain every score. Add
+core/mapping/mitre_attack.py mapping observed behaviours to ATT&CK technique IDs
+via data/mitre_map.yaml. Include unit tests and document the model in docs/.
+```
+
+**Prompt 6: UI with real data**
+```
+Wire the PyQt6 dashboard to real data only. Dash page: KPI cards from SQLite;
+IOC table with type filter, severity badges from the risk score, and a details
+drawer showing the score breakdown and enrichment results. Cases page: real
+cases from DB with create/close/notes. Intel page: real enrichment status and
+ATT&CK techniques seen. Config page: API keys, whitelist editor, score weights.
+Keep the existing dark theme. Add right-click "copy defanged IOC" and
+"re-enrich". Remove all static mock text.
+```
+
+**Prompt 7: correlation graph and campaigns**
+```
+Implement core/correlation: cluster emails into campaigns using shared IOCs,
+shared sender infrastructure, and subject/body similarity (TF-IDF cosine or
+TLSH). Build a networkx graph of senders, domains, IPs, hashes and emails, and
+render it on the Graph page (pyvis in QWebEngineView) with node colour by type
+and size by risk. Clicking a node shows its details. Show real node/cluster
+counts in the header instead of the hardcoded text.
+```
+
+**Prompt 8: reports, STIX and CI**
+```
+Add export: STIX 2.1 bundle (stix2 library: indicators, observed-data,
+relationships), MISP-compatible JSON, and a PDF/HTML incident report with an
+executive summary, IOC tables, score breakdowns, ATT&CK mapping, and a
+chain-of-custody section (file hashes, timestamps, analyst name). Add a Typer
+CLI (`mailintel scan <folder> --enrich --export stix`), a Dockerfile,
+GitHub Actions running pytest + ruff + mypy, and a README with architecture
+diagram, install steps, and screenshots.
+```
+
+**Prompt 9: evaluation for your thesis**
+```
+Create an evaluation harness in `evaluation/`: run MailIntel over a labelled
+corpus (phishing_pot samples as positives, SpamAssassin ham as negatives).
+Report IOC extraction precision/recall against hand-labelled samples, score
+distribution for phishing vs ham, ROC/PR curves, and false-positive analysis.
+Optionally add a TF-IDF + header-feature logistic regression baseline and
+compare it with the rule-based score. Output figures and a results table for my
+report.
+```
+
+## 5. Resume and viva
+
+Example bullet: *"Designed and built MailIntel, a PyQt6/SQLite email DFIR platform that parses .eml evidence, extracts and enriches IOCs via VirusTotal, AbuseIPDB and abuse.ch, computes an explainable risk score, maps findings to MITRE ATT&CK, clusters campaigns, and exports STIX 2.1 reports; evaluated on N phishing samples with X% extraction recall."* Fill in the real numbers only after Prompt 9.
+
+In the viva, be ready to justify your scoring weights, the false-positive trade-offs of the whitelist, and the safety design. Those are the questions that separate a script from a project.
+
+If you'd like, I can put this whole guide and the prompts into a single Markdown file so you can keep it in your repo's `docs/` folder.
