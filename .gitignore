@@ -1,7 +1,43 @@
+# MailIntel .gitignore
+
+# Environment variables
 .env
-*.eml
-__pycache__/
+
+# Virtual Environment
 venv/
-test_emails/
-data/
+env/
+.venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases
+mailintel.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and Output
+case_log/
+*.log
 Project/
+
+# Data and Samples
+*.eml
+test_emails/
+# (Only ignoring contents of data/, we want to keep data/whitelist.yaml)
+data/*
+!data/whitelist.yaml
+
+# IDE / OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

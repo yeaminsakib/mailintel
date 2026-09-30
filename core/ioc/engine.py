@@ -1,5 +1,5 @@
 """
-ioc_engine.py
+core/ioc/engine.py
 Backend logic for MailIntel DFIR desktop tool.
 Extracts and analyzes Indicators of Compromise (IOCs) from email data.
 
@@ -18,21 +18,7 @@ import datetime
 import os
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional, Set
-
-# Curated DFIR Mock Threat Intel Dataset for immediate feedback and realistic demonstration
-DEFAULT_IOC_DATA: List[Dict[str, Any]] = [
-    {"ioc": "139.59.164.251", "type": "IP", "freq": 48, "severity": "Critical", "tag": "C2 Server"},
-    {"ioc": "evil-update-auth.com", "type": "Domain", "freq": 34, "severity": "High", "tag": "Phishing Landing"},
-    {"ioc": "185.220.101.5", "type": "IP", "freq": 29, "severity": "High", "tag": "Tor Exit / Proxy"},
-    {"ioc": "secure-login-portal-office365.net", "type": "Domain", "freq": 23, "severity": "Critical", "tag": "Credential Harvester"},
-    {"ioc": "194.26.29.112", "type": "IP", "freq": 17, "severity": "Medium", "tag": "SMTP Relay"},
-    {"ioc": "cdn-cloud-storage-sync.biz", "type": "Domain", "freq": 15, "severity": "Medium", "tag": "Payload Delivery"},
-    {"ioc": "45.145.66.89", "type": "IP", "freq": 12, "severity": "High", "tag": "Cobalt Strike Beacon"},
-    {"ioc": "invoice-notification-sys.org", "type": "Domain", "freq": 9, "severity": "Low", "tag": "Suspicious Sender"},
-    {"ioc": "91.240.118.232", "type": "IP", "freq": 7, "severity": "Low", "tag": "Scanning Host"},
-    {"ioc": "accounts-verification-service.info", "type": "Domain", "freq": 5, "severity": "High", "tag": "Brand Impersonation"},
-]
+from typing import Any, Dict, List, Set
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +32,10 @@ _RE_IPV4 = re.compile(
 )
 
 # Domain: standard hostname labels ending in a recognisable TLD (2+ chars)
+_RE_DOMAIN = re.compile(
+    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+",
+    re.ASCII,
+)
 _RE_DOMAIN = re.compile(
     r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+"
     r"(?:[a-zA-Z]{2,})\b"
@@ -401,7 +391,7 @@ def _md5_severity(freq: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# UI-facing helpers (used by ui_dashboard.py / main.py)
+# UI-facing helpers (used by app/dashboard.py / main.py)
 # ---------------------------------------------------------------------------
 
 def extract_iocs_from_folder(folder_path: str) -> List[Dict[str, Any]]:
@@ -416,8 +406,8 @@ def extract_iocs_from_folder(folder_path: str) -> List[Dict[str, Any]]:
 def analyze_folder(folder_path: str) -> List[Dict[str, Any]]:
     """
     Analyses a directory of ``.eml`` files and returns a ranked IOC list ready
-    for the dashboard.  Falls back to ``DEFAULT_IOC_DATA`` when the folder is
-    invalid or contains no ``.eml`` files, so the UI is never empty.
+    for the dashboard.  Returns an **empty list** when the folder is invalid or
+    contains no ``.eml`` files (no fake / demo data is ever returned).
 
     Args:
         folder_path: Path to the folder selected by the investigator.
@@ -425,14 +415,14 @@ def analyze_folder(folder_path: str) -> List[Dict[str, Any]]:
     Returns:
         List of IOC dicts (keys: ioc, type, freq, severity, tag),
         sorted by frequency descending, capped at top-15 IPs / top-15 domains
-        / top-10 MD5 hashes.
+        / top-10 MD5 hashes.  Empty list if nothing found.
     """
     if not folder_path or not os.path.exists(folder_path):
-        return list(DEFAULT_IOC_DATA)
+        return []
 
     eml_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".eml")]
     if not eml_files:
-        return list(DEFAULT_IOC_DATA)
+        return []
 
     parsed = parse_eml_folder(folder_path)
     ipv4_counter: Counter  = parsed["_counter_ipv4"]
@@ -468,89 +458,5 @@ def analyze_folder(folder_path: str) -> List[Dict[str, Any]]:
             "tag":      "File Hash",
         })
 
-    if not results:
-        return list(DEFAULT_IOC_DATA)
-
     results.sort(key=lambda x: x["freq"], reverse=True)
     return results
-
-
-# ---------------------------------------------------------------------------
-# Self-test entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import json
-    import tempfile
-
-    print("=" * 60)
-    print(" MailIntel ioc_engine.py  –  self-test")
-    print("=" * 60)
-
-    # ── 1. Build a temporary folder with two synthetic .eml files ──────────
-    DUMMY_EMAILS = [
-        # email_1.eml – phishing campaign IOCs
-        (
-            "email_1.eml",
-            """From: attacker@evil-update-auth.com
-Received: from 139.59.164.251 (evil-update-auth.com)
-X-Mailer: PHPMailer
-Subject: Urgent: Verify your account
-
-Click here: http://secure-login-portal-office365.net/verify
-Payload hash: d41d8cd98f00b204e9800998ecf8427e
-C2 beacon hash: d41d8cd98f00b204e9800998ecf8427e
-Internal hop: 192.168.1.5  <- should be filtered
-Loopback: 127.0.0.1        <- should be filtered
-Google DNS: 8.8.8.8        <- public, kept
-""",
-        ),
-        # email_2.eml – credential harvester + Tor exit
-        (
-            "email_2.eml",
-            """From: noreply@accounts-verification-service.info
-Received: from 185.220.101.5 (tor-exit.example.net)
-Received: from 139.59.164.251
-Subject: Your invoice is ready
-
-Download: http://cdn-cloud-storage-sync.biz/invoice.exe
-Malware hash: 098f6bcd4621d373cade4e832627b4f6
-Alt hash: d41d8cd98f00b204e9800998ecf8427e
-Private range: 10.0.0.1   <- should be filtered
-""",
-        ),
-    ]
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        # Write dummy .eml files
-        for fname, body in DUMMY_EMAILS:
-            with open(os.path.join(tmp_dir, fname), "w", encoding="utf-8") as f:
-                f.write(body)
-
-        # ── 2. Run the parser ──────────────────────────────────────────────
-        result = parse_eml_folder(tmp_dir)
-
-    # ── 3. Print the public JSON structure ────────────────────────────────
-    public = {k: v for k, v in result.items() if not k.startswith("_")}
-    print("\nReturned JSON structure (summary):")
-    summary = {k: v for k, v in public.items() if k != "email_logs"}
-    print(json.dumps(summary, indent=2))
-
-    print("\nPer-email event log (email_logs):")
-    print(json.dumps(result["email_logs"], indent=2))
-
-    # ── 4. Verify the CSV was created ─────────────────────────────────────
-    case_path = result["case_folder_path"]
-    csv_path  = os.path.join(case_path, "ioc_results.csv") if case_path else ""
-
-    print("\n" + "-" * 60)
-    print("Case folder :", case_path or "(not created)")
-    print("CSV exists  :", os.path.isfile(csv_path))
-
-    if os.path.isfile(csv_path):
-        print("\nioc_results.csv contents:")
-        with open(csv_path, encoding="utf-8") as f:
-            print(f.read())
-
-    print("=" * 60)
-    print("Self-test complete.")

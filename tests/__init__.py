@@ -1,0 +1,1 @@
+"""MailIntel test suite."""

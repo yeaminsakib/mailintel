@@ -1,0 +1,71 @@
+# MailIntel – Context-Aware IOC Whitelist
+#
+# Domains are only excluded when they appear in the matching context.
+# Being in 'infrastructure' does NOT whitelist a domain in body URLs.
+# Attackers routinely abuse cloud providers for phishing.
+#
+# Edit this file to tune false-positive filtering for your environment.
+
+infrastructure:
+  # Mail relay / header infrastructure — safe to ignore in Received chains
+  domains:
+    - google.com
+    - googleapis.com
+    - googleusercontent.com
+    - gstatic.com
+    - microsoft.com
+    - microsoftonline.com
+    - office.com
+    - office365.com
+    - outlook.com
+    - live.com
+    - hotmail.com
+    - windows.com
+    - apple.com
+    - icloud.com
+    - spf.protection.outlook.com
+    - cloudflare.com
+    - cloudflare-dns.com
+    - akamaiedge.net
+    - fastly.net
+    - sendgrid.net
+    - mailchimp.com
+    - mailgun.org
+    - amazonses.com
+    - smtp.gmail.com
+    - mail.google.com
+
+body_url:
+  # Only truly benign domains — NEVER add cloud/CDN providers here
+  # (amazonaws.com, sendgrid.net, etc. are abused for phishing)
+  domains:
+    - w3.org
+    - iana.org
+    - ietf.org
+    - rfc-editor.org
+    - schemas.microsoft.com
+    - schemas.openxmlformats.org
+    - cdn.jsdelivr.net
+
+sender:
+  # Free email providers — legitimate senders, not IOCs per se
+  domains:
+    - gmail.com
+    - outlook.com
+    - yahoo.com
+    - hotmail.com
+    - live.com
+    - icloud.com
+    - protonmail.com
+    - proton.me
+    - yandex.com
+
+artifacts:
+  # Encoding/format strings that regex may incorrectly match as domains
+  patterns:
+    - utf-8
+    - charset
+    - iso-8859-1
+    - us-ascii
+    - windows-1252
+    - quoted-printable

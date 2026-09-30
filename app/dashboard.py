@@ -1,26 +1,25 @@
 """
-ui_dashboard.py
+app/dashboard.py
 MailIntel - Threat Intelligence & DFIR Dashboard
 Implements Left Sidebar navigation with QStackedWidget for multi-page workflow.
 Includes the Dash page with 4 KPI cards, Extracted IOC Data Table, and Analyze button.
+
+This module is UI-only.  Business logic lives in core/.
 """
 
-import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
+    QTableWidget, QTableWidgetItem, QHeaderView,
     QHBoxLayout, QVBoxLayout, QGridLayout, QFrame,
     QAbstractItemView, QStackedWidget
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QCursor
-
-from ioc_engine import analyze_folder, parse_eml_folder
+from PyQt6.QtGui import QFont, QColor, QCursor
 
 
 class RiskBadge(QLabel):
     """Custom styled badge for IOC risk levels in dark DFIR theme."""
-    def __init__(self, risk_level: str = "Medium", parent=None):
+    def __init__(self, risk_level: str = "Medium", parent: QWidget | None = None):
         cleaned_risk = (risk_level or "Medium").upper()
         super().__init__(cleaned_risk, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -51,7 +50,7 @@ class RiskBadge(QLabel):
 
 
 class DashboardWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MailIntel - Email DFIR Threat Intelligence Dashboard")
         self.resize(1320, 820)
@@ -71,14 +70,13 @@ class DashboardWindow(QMainWindow):
         # Connect initial selection (Index 0: Dash)
         self.select_nav_button(0)
 
-        # Populate table with default demo IOCs on startup
-        default_result = parse_eml_folder("")
-        self.populate_table_with_iocs(default_result.get("email_logs", []))
+        # Start with an empty table – no fake/demo data
+        self.populate_table_with_iocs([])
 
     # =========================================================================
     # LEFT SIDEBAR & NAVIGATION SYSTEM
     # =========================================================================
-    def init_left_sidebar(self):
+    def init_left_sidebar(self) -> None:
         """
         Left Sidebar: Dark-themed panel (#1a1d24) with 5 vertical tool buttons.
         Buttons: Dash, Cases, Graph, Intel, Config.
@@ -131,7 +129,7 @@ class DashboardWindow(QMainWindow):
             ("⚙️", "Config", 4),
         ]
 
-        self.nav_buttons = []
+        self.nav_buttons: list[QPushButton] = []
         for icon, label, idx in nav_definitions:
             btn = QPushButton(f"{icon}\n{label}")
             btn.setFixedSize(62, 58)
@@ -157,7 +155,7 @@ class DashboardWindow(QMainWindow):
 
         self.main_layout.addWidget(self.sidebar_frame)
 
-    def select_nav_button(self, selected_index: int):
+    def select_nav_button(self, selected_index: int) -> None:
         """
         Switches the QStackedWidget page and updates the active button style.
         Active button receives a subtle teal or blue border (#00d2ff).
@@ -202,7 +200,7 @@ class DashboardWindow(QMainWindow):
     # =========================================================================
     # CENTER STACKED WIDGET & PAGES
     # =========================================================================
-    def init_stacked_area(self):
+    def init_stacked_area(self) -> None:
         """Initializes the QStackedWidget in the central area."""
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.setObjectName("mainStackedWidget")
@@ -279,12 +277,12 @@ class DashboardWindow(QMainWindow):
         kpi_row = QHBoxLayout()
         kpi_row.setSpacing(16)
 
-        self.kpi_cards = {}
+        self.kpi_cards: dict[str, QLabel] = {}
         kpi_definitions = [
-            ("total_emails", "TOTAL EMAILS", "142", "Corpus parsed files", "#00f0ff"),
-            ("unique_ips", "UNIQUE IPS", "28", "Network & relay nodes", "#38bdf8"),
-            ("unique_domains", "UNIQUE DOMAINS", "45", "DNS & sender addresses", "#06b6d4"),
-            ("top_spammer", "TOP SPAMMER", "139.59.164.251", "48 incidents logged", "#f43f5e"),
+            ("total_emails", "TOTAL EMAILS", "0", "Corpus parsed files", "#00f0ff"),
+            ("unique_ips", "UNIQUE IPS", "0", "Network & relay nodes", "#38bdf8"),
+            ("unique_domains", "UNIQUE DOMAINS", "0", "DNS & sender addresses", "#06b6d4"),
+            ("top_spammer", "TOP SPAMMER", "—", "Highest IOC concentration", "#f43f5e"),
         ]
 
         for key, title, default_val, subtext, accent in kpi_definitions:
@@ -338,7 +336,7 @@ class DashboardWindow(QMainWindow):
         table_title = QLabel("Extracted IOC Data Table")
         table_title.setObjectName("sectionTitle")
 
-        self.record_count_label = QLabel("10 IOCs Identified")
+        self.record_count_label = QLabel("0 IOCs Identified")
         self.record_count_label.setObjectName("recordCountLabel")
 
         table_header_box.addWidget(table_title)
@@ -378,7 +376,7 @@ class DashboardWindow(QMainWindow):
         self.analyze_button.setObjectName("analyzeButton")
         self.analyze_button.setFixedHeight(48)
         self.analyze_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.analyze_button.clicked.connect(self.handle_select_and_analyze)
+        # Connection is done in main.py (single controller, no duplicate handler)
         layout.addWidget(self.analyze_button)
 
         return page
@@ -400,14 +398,14 @@ class DashboardWindow(QMainWindow):
         layout.addWidget(header)
         layout.addWidget(sub)
 
-        # Metrics Row
+        # Metrics Row – real counts, starting at zero
         metrics_box = QHBoxLayout()
         metrics_box.setSpacing(16)
         case_stats = [
-            ("OPEN INVESTIGATIONS", "4", "#00f0ff"),
-            ("HIGH PRIORITY", "2", "#f59e0b"),
-            ("RESOLVED CASES", "27", "#10b981"),
-            ("EVIDENCE ARTIFACTS", "148", "#38bdf8")
+            ("OPEN INVESTIGATIONS", "0", "#00f0ff"),
+            ("HIGH PRIORITY", "0", "#f59e0b"),
+            ("RESOLVED CASES", "0", "#10b981"),
+            ("EVIDENCE ARTIFACTS", "0", "#38bdf8"),
         ]
         for title, val, col in case_stats:
             card = QFrame()
@@ -422,7 +420,7 @@ class DashboardWindow(QMainWindow):
             metrics_box.addWidget(card)
         layout.addLayout(metrics_box)
 
-        # Cases Table
+        # Cases Table – empty; will be populated from SQLite in a later phase
         cases_card = QFrame()
         cases_card.setObjectName("tableContainer")
         cc_layout = QVBoxLayout(cases_card)
@@ -430,30 +428,17 @@ class DashboardWindow(QMainWindow):
         c_title.setObjectName("sectionTitle")
         cc_layout.addWidget(c_title)
 
-        cases_table = QTableWidget()
-        cases_table.setObjectName("iocTable")
-        cases_table.setColumnCount(5)
-        cases_table.setHorizontalHeaderLabels(["Case ID", "Target Mailbox", "Threat Vector", "Priority", "Status"])
-        cases_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        cases_table.verticalHeader().setVisible(False)
-        cases_table.setRowCount(4)
+        self.cases_table = QTableWidget()
+        self.cases_table.setObjectName("iocTable")
+        self.cases_table.setColumnCount(5)
+        self.cases_table.setHorizontalHeaderLabels(
+            ["Case ID", "Target Mailbox", "Threat Vector", "Priority", "Status"]
+        )
+        self.cases_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.cases_table.verticalHeader().setVisible(False)
+        self.cases_table.setRowCount(0)  # empty state – no fake rows
 
-        cases_data = [
-            ("CAS-2026-089", "cfo@enterprise-corp.com", "Spearphishing / Invoice Fraud", "Critical", "Active Hunt"),
-            ("CAS-2026-088", "hr-portal@enterprise-corp.com", "Malicious Macro .xlsm Attachment", "High", "Triaged"),
-            ("CAS-2026-087", "sysadmin@enterprise-corp.com", "Credential Harvesting / O365 Spoof", "Critical", "In Review"),
-            ("CAS-2026-086", "procurement@enterprise-corp.com", "External C2 Beacon Callback", "Medium", "Contained")
-        ]
-
-        for r, row in enumerate(cases_data):
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                if c == 3:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                cases_table.setItem(r, c, item)
-            cases_table.setRowHeight(r, 42)
-
-        cc_layout.addWidget(cases_table)
+        cc_layout.addWidget(self.cases_table)
         layout.addWidget(cases_card)
         return page
 
@@ -484,17 +469,18 @@ class DashboardWindow(QMainWindow):
         graph_icon.setStyleSheet("font-size: 64px;")
         graph_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        graph_status = QLabel("Interactive Correlation Graph Engine Online")
+        graph_status = QLabel("Correlation Graph Engine")
         graph_status.setStyleSheet("font-size: 18px; font-weight: 700; color: #00f0ff;")
         graph_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        graph_desc = QLabel("38 Linked Nodes • 14 IP Clusters • 6 Autonomous Systems • 9 Phishing Domains")
-        graph_desc.setStyleSheet("color: #94a3b8; font-size: 13px;")
-        graph_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Honest empty state – no hardcoded node/cluster counts
+        self.graph_desc = QLabel("No data yet — scan an .eml folder to populate the graph")
+        self.graph_desc.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        self.graph_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         gf_layout.addWidget(graph_icon)
         gf_layout.addWidget(graph_status)
-        gf_layout.addWidget(graph_desc)
+        gf_layout.addWidget(self.graph_desc)
 
         layout.addWidget(graph_frame)
         return page
@@ -519,11 +505,12 @@ class DashboardWindow(QMainWindow):
         intel_grid = QGridLayout()
         intel_grid.setSpacing(16)
 
+        # Feed cards – status reflects reality: not yet connected
         feed_items = [
-            ("AbuseIPDB Global Blacklist", "Synchronized 10m ago", "12,490 Malicious IPs Indexed", "Active"),
-            ("AlienVault OTX Threat Pulse", "Synchronized 2m ago", "34 Active Pulses Match EML Data", "Active"),
-            ("URLhaus Phishing Feeds", "Live Stream Connected", "4 Phishing Domains Blocklisted", "Active"),
-            ("MITRE ATT&CK Matrix Mapping", "Framework v14.1", "T1566, T1204, T1071.001 Tracked", "Active")
+            ("AbuseIPDB", "Not configured", "Configure API key in Settings to enable", "Inactive"),
+            ("AlienVault OTX", "Not configured", "Configure API key in Settings to enable", "Inactive"),
+            ("URLhaus / ThreatFox", "Not configured", "Configure API key in Settings to enable", "Inactive"),
+            ("MITRE ATT&CK Mapping", "Awaiting data", "Scan emails to map observed techniques", "Inactive"),
         ]
 
         for i, (title, sync, desc, st) in enumerate(feed_items):
@@ -533,7 +520,7 @@ class DashboardWindow(QMainWindow):
             t = QLabel(title)
             t.setStyleSheet("font-size: 15px; font-weight: 700; color: #f1f5f9;")
             s = QLabel(sync)
-            s.setStyleSheet("font-size: 11px; color: #00f0ff; font-weight: 600;")
+            s.setStyleSheet("font-size: 11px; color: #64748b; font-weight: 600;")
             d = QLabel(desc)
             d.setStyleSheet("font-size: 12px; color: #94a3b8;")
             c_lay.addWidget(t)
@@ -666,7 +653,7 @@ class DashboardWindow(QMainWindow):
             ("EML Parsing Batch Size", "Maximum emails processed concurrently (Default: 50)"),
             ("Private IP Filtering (RFC 1918)", "Exclude 10.0.0.0/8, 172.16.0.0/12, and 192.168.0.0/16"),
             ("Deep Header Inspection", "Analyze Received-SPF, Authentication-Results, and DKIM signatures"),
-            ("Automated Reputation Lookups", "Query VirusTotal API on folder load when key is configured")
+            ("Automated Reputation Lookups", "Query VirusTotal API on folder load when key is configured"),
         ]
 
         for opt_title, opt_desc in settings:
@@ -699,7 +686,7 @@ class DashboardWindow(QMainWindow):
         layout.addStretch()
         return page
 
-    def handle_save_vt_key(self):
+    def handle_save_vt_key(self) -> None:
         """Saves or confirms the VirusTotal API Key."""
         key = self.vt_api_key_input.text().strip()
         if key:
@@ -709,20 +696,15 @@ class DashboardWindow(QMainWindow):
             self.vt_status_label.setText("⚠ Please enter a valid VirusTotal API key")
             self.vt_status_label.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
 
-    def handle_test_vt_key(self):
-        """Simulates API connection testing for VirusTotal."""
-        key = self.vt_api_key_input.text().strip()
-        if len(key) >= 16:
-            self.vt_status_label.setText("✓ VirusTotal v3 API Connection Verified (HTTP 200 OK)")
-            self.vt_status_label.setStyleSheet("color: #00f0ff; font-size: 11px; font-weight: 600;")
-        else:
-            self.vt_status_label.setText("✗ Invalid API key format (Expected 64 hex characters)")
-            self.vt_status_label.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: 600;")
+    def handle_test_vt_key(self) -> None:
+        """Placeholder — real connectivity test will be added in the enrichment phase."""
+        self.vt_status_label.setText("⚠ Not implemented yet — enrichment module required")
+        self.vt_status_label.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
 
     # =========================================================================
     # DATA POPULATION & USER ACTIONS
     # =========================================================================
-    def populate_table_with_iocs(self, email_logs: list, folder_path: str = ""):
+    def populate_table_with_iocs(self, email_logs: list[dict], folder_path: str = "") -> None:
         """
         Populates the QTableWidget with per-email IOC records.
         Columns: 'File Name', 'Extracted IPs', 'Extracted Domains', 'Extracted Hashes'.
@@ -751,25 +733,19 @@ class DashboardWindow(QMainWindow):
             # Col 1: Extracted IPs
             ip_item = QTableWidgetItem(ips)
             ip_item.setFont(QFont("Consolas", 9))
-            ip_item.setForeground(
-                __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor("#38bdf8")
-            )
+            ip_item.setForeground(QColor("#38bdf8"))
             self.table.setItem(row_idx, 1, ip_item)
 
             # Col 2: Extracted Domains
             dom_item = QTableWidgetItem(domains)
             dom_item.setFont(QFont("Consolas", 9))
-            dom_item.setForeground(
-                __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor("#a78bfa")
-            )
+            dom_item.setForeground(QColor("#a78bfa"))
             self.table.setItem(row_idx, 2, dom_item)
 
             # Col 3: Extracted Hashes
             hash_item = QTableWidgetItem(hashes)
             hash_item.setFont(QFont("Consolas", 9))
-            hash_item.setForeground(
-                __import__("PyQt6.QtGui", fromlist=["QColor"]).QColor("#f59e0b")
-            )
+            hash_item.setForeground(QColor("#f59e0b"))
             self.table.setItem(row_idx, 3, hash_item)
 
             self.table.setRowHeight(row_idx, 46)
@@ -777,11 +753,11 @@ class DashboardWindow(QMainWindow):
         self.record_count_label.setText(f"{len(email_logs)} Email(s) Scanned")
         self.update_kpi_cards(email_logs, folder_path)
 
-    def update_kpi_cards(self, email_logs: list, folder_path: str = ""):
+    def update_kpi_cards(self, email_logs: list[dict], folder_path: str = "") -> None:
         """Recalculates and updates the 4 KPI summary cards from email_logs."""
         # Count unique IPs and domains across all emails
-        all_ips     = set()
-        all_domains = set()
+        all_ips:     set[str] = set()
+        all_domains: set[str] = set()
         top_sender  = ""
         max_iocs    = -1
 
@@ -801,35 +777,22 @@ class DashboardWindow(QMainWindow):
                 max_iocs   = ioc_count
                 top_sender = log.get("filename", "")
 
-        total_emails = len(email_logs) if email_logs else 142
-        num_ips      = len(all_ips)     if all_ips     else 28
-        num_domains  = len(all_domains) if all_domains else 45
-        top_display  = top_sender       if top_sender  else "139.59.164.251"
+        # Honest zero / dash when no data — never show fake numbers
+        total_emails = len(email_logs)
+        num_ips      = len(all_ips)
+        num_domains  = len(all_domains)
+        top_display  = top_sender if top_sender else "—"
 
-        if "total_emails"   in self.kpi_cards:
+        if "total_emails" in self.kpi_cards:
             self.kpi_cards["total_emails"].setText(str(total_emails))
-        if "unique_ips"     in self.kpi_cards:
+        if "unique_ips" in self.kpi_cards:
             self.kpi_cards["unique_ips"].setText(str(num_ips))
         if "unique_domains" in self.kpi_cards:
             self.kpi_cards["unique_domains"].setText(str(num_domains))
-        if "top_spammer"    in self.kpi_cards:
+        if "top_spammer" in self.kpi_cards:
             self.kpi_cards["top_spammer"].setText(top_display)
 
-    def handle_select_and_analyze(self):
-        """Handler for 'Select .eml Folder & Analyze' button."""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Folder Containing .eml Files",
-            "",
-            QFileDialog.Option.ShowDirsOnly
-        )
-
-        if folder:
-            result     = parse_eml_folder(folder)
-            email_logs = result.get("email_logs", [])
-            self.populate_table_with_iocs(email_logs, folder_path=folder)
-
-    def filter_table(self, query):
+    def filter_table(self, query: str) -> None:
         """Filter table rows based on search input across all four columns."""
         q = query.lower().strip()
         for row in range(self.table.rowCount()):
