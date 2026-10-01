@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS cases (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     title       TEXT    NOT NULL,
     description TEXT    NOT NULL DEFAULT '',
+    notes       TEXT    NOT NULL DEFAULT '',       -- analyst investigation notes
     status      TEXT    NOT NULL DEFAULT 'open',  -- 'open','closed','archived'
     priority    TEXT    NOT NULL DEFAULT 'medium',
     created_at  TEXT    NOT NULL,

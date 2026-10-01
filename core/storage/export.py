@@ -5,10 +5,13 @@ CSV export utilities for MailIntel.
 Functions
 ---------
 export_csv_all(db, output_path)
-    Write every stored email to a single cumulative CSV.
+    Write every stored email (with IOC columns) to a single cumulative CSV.
 
 export_csv_case(db, case_id, output_path)
     Write all emails in a given case to a CSV.
+
+export_all_cases(db, output_dir)
+    Write one CSV per case into *output_dir* plus the cumulative CSV.
 """
 from __future__ import annotations
 
@@ -21,6 +24,20 @@ from .database import Database
 
 
 # ---------------------------------------------------------------------------
+# CSV field definitions
+# ---------------------------------------------------------------------------
+
+_CSV_FIELDNAMES: list[str] = [
+    "id", "file_sha256", "filename", "filepath",
+    "from", "reply_to", "return_path", "subject", "date", "message_id",
+    "spf", "dkim", "dmarc",
+    "first_hop_ip", "url_count", "attach_count",
+    "ioc_ips", "ioc_domains", "ioc_urls", "ioc_emails", "ioc_hashes",
+    "first_seen", "last_seen",
+]
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -28,6 +45,8 @@ def _row_to_csv_record(row: dict[str, Any]) -> dict[str, str]:
     """Flatten a database email row into a CSV-friendly flat dict.
 
     JSON blobs are unpacked to their most useful sub-fields.
+    IOC columns (ioc_ips, ioc_domains, etc.) are passed through directly
+    when present (produced by ``Database.get_all_emails_with_iocs``).
     """
     headers: dict = json.loads(row.get("headers_json", "{}"))
     auth: dict    = json.loads(row.get("auth_json",    "{}"))
@@ -49,18 +68,15 @@ def _row_to_csv_record(row: dict[str, Any]) -> dict[str, str]:
         "first_hop_ip": row.get("first_hop_ip", ""),
         "url_count":    str(row.get("url_count", 0)),
         "attach_count": str(row.get("attach_count", 0)),
+        # IOC columns — provided by get_all_emails_with_iocs()
+        "ioc_ips":      row.get("ioc_ips", ""),
+        "ioc_domains":  row.get("ioc_domains", ""),
+        "ioc_urls":     row.get("ioc_urls", ""),
+        "ioc_emails":   row.get("ioc_emails", ""),
+        "ioc_hashes":   row.get("ioc_hashes", ""),
         "first_seen":   row.get("first_seen", ""),
         "last_seen":    row.get("last_seen", ""),
     }
-
-
-_CSV_FIELDNAMES: list[str] = [
-    "id", "file_sha256", "filename", "filepath",
-    "from", "reply_to", "return_path", "subject", "date", "message_id",
-    "spf", "dkim", "dmarc",
-    "first_hop_ip", "url_count", "attach_count",
-    "first_seen", "last_seen",
-]
 
 
 def _write_csv(rows: list[dict[str, Any]], output_path: Path) -> None:
@@ -78,7 +94,7 @@ def _write_csv(rows: list[dict[str, Any]], output_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def export_csv_all(db: Database, output_path: str | Path) -> Path:
-    """Write all stored emails to a single cumulative CSV.
+    """Write all stored emails (with IOC columns) to a single cumulative CSV.
 
     Parameters
     ----------
@@ -93,13 +109,13 @@ def export_csv_all(db: Database, output_path: str | Path) -> Path:
         Absolute path of the written file.
     """
     output_path = Path(output_path).resolve()
-    rows = db.get_all_emails()
+    rows = db.get_all_emails_with_iocs()
     _write_csv(rows, output_path)
     return output_path
 
 
 def export_csv_case(db: Database, case_id: int, output_path: str | Path) -> Path:
-    """Write all emails in *case_id* to a per-case CSV.
+    """Write all emails in *case_id* (with IOC columns) to a per-case CSV.
 
     Parameters
     ----------
@@ -116,6 +132,54 @@ def export_csv_case(db: Database, case_id: int, output_path: str | Path) -> Path
         Absolute path of the written file.
     """
     output_path = Path(output_path).resolve()
-    rows = db.get_emails_for_case(case_id)
+    rows = db.get_emails_for_case_with_iocs(case_id)
     _write_csv(rows, output_path)
     return output_path
+
+
+def export_all_cases(db: Database, output_dir: str | Path) -> list[Path]:
+    """Write a cumulative CSV plus one CSV per case to *output_dir*.
+
+    Files created::
+
+        output_dir/
+            all_emails.csv          – every email in the database
+            case_<id>_<title>.csv   – one file per case
+
+    Parameters
+    ----------
+    db : Database
+        Open database instance.
+    output_dir : str or Path
+        Directory to write into (created if needed).
+
+    Returns
+    -------
+    list[Path]
+        Paths to all files written.
+    """
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    written: list[Path] = []
+
+    # Cumulative CSV
+    all_csv = output_dir / "all_emails.csv"
+    export_csv_all(db, all_csv)
+    written.append(all_csv)
+
+    # Per-case CSVs
+    for case in db.get_all_cases():
+        case_id = case["id"]
+        title_slug = (
+            case.get("title", "")
+            .lower()
+            .replace(" ", "_")[:40]
+            .strip("_")
+            or "untitled"
+        )
+        case_csv = output_dir / f"case_{case_id}_{title_slug}.csv"
+        export_csv_case(db, case_id, case_csv)
+        written.append(case_csv)
+
+    return written

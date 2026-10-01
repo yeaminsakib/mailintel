@@ -45,14 +45,25 @@ class Database:
     db_path : str or Path or ``None``
         Path to the SQLite file.  Pass ``':memory:'`` for an in-memory DB
         (useful in tests).  Defaults to ``mailintel.db`` in the project root.
+    commit_interval : int
+        When > 0, auto-commit is deferred and commits happen every
+        *commit_interval* write operations.  This batches IO during large
+        scans.  Call :meth:`batch_commit` to flush pending writes.
+        When 0 (default), every write commits immediately.
     """
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+        commit_interval: int = 0,
+    ) -> None:
         if db_path is None:
             db_path = _DEFAULT_DB_PATH
         self._path = str(db_path)
         self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._commit_interval = max(0, commit_interval)
+        self._pending_writes = 0
         self._apply_schema()
 
     # ------------------------------------------------------------------
@@ -65,8 +76,29 @@ class Database:
         self._conn.commit()
 
     def close(self) -> None:
-        """Close the underlying connection."""
+        """Flush pending writes and close the underlying connection."""
+        self.batch_commit()
         self._conn.close()
+
+    # ------------------------------------------------------------------
+    # Batched commit helpers
+    # ------------------------------------------------------------------
+
+    def _auto_commit(self) -> None:
+        """Commit immediately or defer, depending on ``commit_interval``."""
+        if self._commit_interval == 0:
+            self._conn.commit()
+        else:
+            self._pending_writes += 1
+            if self._pending_writes >= self._commit_interval:
+                self._conn.commit()
+                self._pending_writes = 0
+
+    def batch_commit(self) -> None:
+        """Force-commit any pending writes.  Safe to call at any time."""
+        if self._pending_writes > 0:
+            self._conn.commit()
+            self._pending_writes = 0
 
     # ------------------------------------------------------------------
     # emails
@@ -126,8 +158,16 @@ class Database:
             ),
         )
         row = cur.fetchone()
-        self._conn.commit()
+        self._auto_commit()
         return row[0]
+
+    def email_exists(self, file_sha256: str) -> bool:
+        """Return True if an email with this SHA-256 is already stored."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM emails WHERE file_sha256 = ? LIMIT 1",
+            (file_sha256,),
+        )
+        return cur.fetchone() is not None
 
     def get_all_emails(self) -> list[dict[str, Any]]:
         """Return all email rows as plain dicts."""
@@ -172,7 +212,7 @@ class Database:
             (ioc_type, value, now, now),
         )
         row = cur.fetchone()
-        self._conn.commit()
+        self._auto_commit()
         return row[0]
 
     def get_all_iocs(self) -> list[dict[str, Any]]:
@@ -218,7 +258,7 @@ class Database:
             """,
             (email_id, ioc_id, context),
         )
-        self._conn.commit()
+        self._auto_commit()
 
     def get_iocs_for_email(self, email_id: int) -> list[dict[str, Any]]:
         """Return all IOCs linked to a given email."""
@@ -233,6 +273,38 @@ class Database:
             (email_id,),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    def get_email_with_iocs(self, email_id: int) -> dict[str, Any]:
+        """Return an email row with its IOCs collapsed into typed lists.
+
+        The returned dict has the base email columns plus:
+        ``ioc_ips``, ``ioc_domains``, ``ioc_urls``, ``ioc_emails``,
+        ``ioc_hashes`` — each a comma-separated string.
+        """
+        cur = self._conn.execute("SELECT * FROM emails WHERE id = ?", (email_id,))
+        row = cur.fetchone()
+        if row is None:
+            return {}
+        record = dict(row)
+        iocs = self.get_iocs_for_email(email_id)
+        record.update(_collapse_iocs(iocs))
+        return record
+
+    def get_all_emails_with_iocs(self) -> list[dict[str, Any]]:
+        """Return every email with its IOCs collapsed — for CSV export."""
+        emails = self.get_all_emails()
+        for email in emails:
+            iocs = self.get_iocs_for_email(email["id"])
+            email.update(_collapse_iocs(iocs))
+        return emails
+
+    def get_emails_for_case_with_iocs(self, case_id: int) -> list[dict[str, Any]]:
+        """Return all emails linked to a case with collapsed IOCs."""
+        emails = self.get_emails_for_case(case_id)
+        for email in emails:
+            iocs = self.get_iocs_for_email(email["id"])
+            email.update(_collapse_iocs(iocs))
+        return emails
 
     # ------------------------------------------------------------------
     # enrichments
@@ -275,7 +347,15 @@ class Database:
             """,
             (ioc_id, provider, raw_json, verdict, score, now),
         )
-        self._conn.commit()
+        self._auto_commit()
+
+    def get_enrichments_for_ioc(self, ioc_id: int) -> list[dict[str, Any]]:
+        """Return all enrichment results for a given IOC."""
+        cur = self._conn.execute(
+            "SELECT * FROM enrichments WHERE ioc_id = ? ORDER BY fetched_at DESC",
+            (ioc_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # cases
@@ -285,20 +365,22 @@ class Database:
         self,
         title: str,
         description: str = "",
+        notes: str = "",
         priority: str = "medium",
     ) -> int:
         """Create a new investigation case and return its id."""
         now = _now()
         cur = self._conn.execute(
             """
-            INSERT INTO cases (title, description, status, priority, created_at, updated_at)
-            VALUES (?, ?, 'open', ?, ?, ?)
+            INSERT INTO cases (title, description, notes, status, priority,
+                               created_at, updated_at)
+            VALUES (?, ?, ?, 'open', ?, ?, ?)
             RETURNING id
             """,
-            (title, description, priority, now, now),
+            (title, description, notes, priority, now, now),
         )
         row = cur.fetchone()
-        self._conn.commit()
+        self._auto_commit()
         return row[0]
 
     def update_case_status(self, case_id: int, status: str) -> None:
@@ -307,12 +389,55 @@ class Database:
             "UPDATE cases SET status = ?, updated_at = ? WHERE id = ?",
             (status, _now(), case_id),
         )
-        self._conn.commit()
+        self._auto_commit()
+
+    def update_case_notes(self, case_id: int, notes: str) -> None:
+        """Append or replace analyst notes on a case."""
+        self._conn.execute(
+            "UPDATE cases SET notes = ?, updated_at = ? WHERE id = ?",
+            (notes, _now(), case_id),
+        )
+        self._auto_commit()
 
     def get_all_cases(self) -> list[dict[str, Any]]:
         """Return all cases ordered by creation date descending."""
         cur = self._conn.execute("SELECT * FROM cases ORDER BY created_at DESC")
         return [dict(r) for r in cur.fetchall()]
+
+    def get_case(self, case_id: int) -> dict[str, Any] | None:
+        """Return a single case by id, or None if not found."""
+        cur = self._conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def get_case_stats(self) -> dict[str, int]:
+        """Return aggregate case statistics for KPI cards.
+
+        Returns
+        -------
+        dict
+            Keys: ``open``, ``closed``, ``archived``, ``high_priority``,
+            ``total``.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT
+                COUNT(*)                                      AS total,
+                SUM(CASE WHEN status = 'open'     THEN 1 ELSE 0 END) AS open,
+                SUM(CASE WHEN status = 'closed'   THEN 1 ELSE 0 END) AS closed,
+                SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived,
+                SUM(CASE WHEN priority = 'high'   THEN 1 ELSE 0 END) AS high_priority
+            FROM cases
+            """
+        )
+        row = cur.fetchone()
+        return {
+            "total":         row["total"]         or 0,
+            "open":          row["open"]          or 0,
+            "closed":        row["closed"]        or 0,
+            "archived":      row["archived"]      or 0,
+            "high_priority": row["high_priority"] or 0,
+        }
 
     def add_email_to_case(self, case_id: int, email_id: int) -> None:
         """Associate an email with a case (idempotent)."""
@@ -323,7 +448,7 @@ class Database:
             """,
             (case_id, email_id, _now()),
         )
-        self._conn.commit()
+        self._auto_commit()
 
     def get_emails_for_case(self, case_id: int) -> list[dict[str, Any]]:
         """Return all emails linked to a specific case."""
@@ -338,3 +463,50 @@ class Database:
             (case_id,),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    def get_email_count_for_case(self, case_id: int) -> int:
+        """Return count of emails linked to a specific case."""
+        cur = self._conn.execute(
+            "SELECT COUNT(*) FROM case_emails WHERE case_id = ?",
+            (case_id,),
+        )
+        return cur.fetchone()[0]
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _collapse_iocs(iocs: list[dict[str, Any]]) -> dict[str, str]:
+    """Collapse a list of IOC rows into typed comma-separated strings.
+
+    Returns keys: ``ioc_ips``, ``ioc_domains``, ``ioc_urls``,
+    ``ioc_emails``, ``ioc_hashes``.
+    """
+    ips: list[str] = []
+    domains: list[str] = []
+    urls: list[str] = []
+    emails: list[str] = []
+    hashes: list[str] = []
+
+    for ioc in iocs:
+        ioc_type = ioc.get("type", "")
+        value = ioc.get("value", "")
+        if ioc_type in ("ipv4", "ipv6"):
+            ips.append(value)
+        elif ioc_type == "domain":
+            domains.append(value)
+        elif ioc_type == "url":
+            urls.append(value)
+        elif ioc_type == "email":
+            emails.append(value)
+        elif ioc_type.startswith("hash_"):
+            hashes.append(value)
+
+    return {
+        "ioc_ips":     ", ".join(ips),
+        "ioc_domains": ", ".join(domains),
+        "ioc_urls":    ", ".join(urls),
+        "ioc_emails":  ", ".join(emails),
+        "ioc_hashes":  ", ".join(hashes),
+    }

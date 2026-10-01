@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QHBoxLayout, QVBoxLayout, QGridLayout, QFrame,
-    QAbstractItemView, QStackedWidget
+    QAbstractItemView, QStackedWidget, QProgressBar
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QCursor
@@ -379,6 +379,78 @@ class DashboardWindow(QMainWindow):
         # Connection is done in main.py (single controller, no duplicate handler)
         layout.addWidget(self.analyze_button)
 
+        # -----------------------------------------------------------------
+        # 4. PROGRESS BAR + CANCEL BUTTON (hidden until scan starts)
+        # -----------------------------------------------------------------
+        self.progress_frame = QFrame()
+        self.progress_frame.setObjectName("progressFrame")
+        self.progress_frame.setStyleSheet("""
+            QFrame#progressFrame {
+                background-color: #202530;
+                border: 1px solid #2a3242;
+                border-radius: 8px;
+                padding: 8px;
+            }
+        """)
+        pf_layout = QHBoxLayout(self.progress_frame)
+        pf_layout.setContentsMargins(14, 8, 14, 8)
+        pf_layout.setSpacing(12)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("scanProgressBar")
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(28)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #12141a;
+                border: 1px solid #2d3545;
+                border-radius: 6px;
+                text-align: center;
+                color: #e2e8f0;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00f0ff, stop:1 #0284c7
+                );
+                border-radius: 5px;
+            }
+        """)
+        pf_layout.addWidget(self.progress_bar, 1)
+
+        self.progress_label = QLabel("Scanning...")
+        self.progress_label.setStyleSheet(
+            "font-size: 11px; color: #94a3b8; font-weight: 600; min-width: 160px;"
+        )
+        pf_layout.addWidget(self.progress_label)
+
+        self.cancel_button = QPushButton("✕ Cancel")
+        self.cancel_button.setFixedSize(100, 30)
+        self.cancel_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(239, 68, 68, 0.15);
+                color: #ef4444;
+                border: 1px solid rgba(239, 68, 68, 0.5);
+                border-radius: 6px;
+                font-weight: 700;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #ef4444;
+                color: #ffffff;
+            }
+        """)
+        pf_layout.addWidget(self.cancel_button)
+
+        self.progress_frame.setVisible(False)
+        layout.addWidget(self.progress_frame)
+
         return page
 
     # -------------------------------------------------------------------------
@@ -687,19 +759,57 @@ class DashboardWindow(QMainWindow):
         return page
 
     def handle_save_vt_key(self) -> None:
-        """Saves or confirms the VirusTotal API Key."""
+        """Save the VirusTotal API key securely via the OS keyring."""
+        from core.enrichment.keys import get_api_key, set_api_key
+
         key = self.vt_api_key_input.text().strip()
-        if key:
-            self.vt_status_label.setText(f"✓ API Key Saved ({len(key)} chars) • Ready for enrichment")
-            self.vt_status_label.setStyleSheet("color: #10b981; font-size: 11px; font-weight: 600;")
-        else:
+        if not key:
             self.vt_status_label.setText("⚠ Please enter a valid VirusTotal API key")
             self.vt_status_label.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
+            return
+
+        success = set_api_key("virustotal", key)
+        if success:
+            self.vt_api_key_input.clear()
+            self.vt_status_label.setText(
+                f"✓ API key saved to OS keyring ({len(key)} chars) — ready for enrichment"
+            )
+            self.vt_status_label.setStyleSheet("color: #10b981; font-size: 11px; font-weight: 600;")
+        else:
+            self.vt_status_label.setText("✕ Failed to save key — check OS keyring permissions")
+            self.vt_status_label.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: 600;")
 
     def handle_test_vt_key(self) -> None:
-        """Placeholder — real connectivity test will be added in the enrichment phase."""
-        self.vt_status_label.setText("⚠ Not implemented yet — enrichment module required")
-        self.vt_status_label.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
+        """Test VirusTotal connectivity with the stored API key.
+
+        Makes a real HTTP request to the VT /users/me endpoint and
+        displays the true HTTP status code and result.
+        """
+        from core.enrichment.keys import get_api_key
+        from core.enrichment.virustotal import VirusTotalProvider
+
+        self.vt_status_label.setText("⏳ Testing connectivity...")
+        self.vt_status_label.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
+        # Force a repaint so the user sees the "testing..." text
+        self.vt_status_label.repaint()
+
+        api_key = get_api_key("virustotal")
+        if not api_key:
+            self.vt_status_label.setText(
+                "⚠ No API key stored — save a key first"
+            )
+            self.vt_status_label.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 600;")
+            return
+
+        provider = VirusTotalProvider(api_key=api_key)
+        ok, message = provider.test_connectivity()
+
+        if ok:
+            self.vt_status_label.setText(f"✓ {message}")
+            self.vt_status_label.setStyleSheet("color: #10b981; font-size: 11px; font-weight: 600;")
+        else:
+            self.vt_status_label.setText(f"✕ {message}")
+            self.vt_status_label.setStyleSheet("color: #ef4444; font-size: 11px; font-weight: 600;")
 
     # =========================================================================
     # DATA POPULATION & USER ACTIONS
@@ -806,3 +916,88 @@ class DashboardWindow(QMainWindow):
                         match = True
                         break
             self.table.setRowHidden(row, not match)
+
+    # =========================================================================
+    # PROGRESS BAR CONTROL
+    # =========================================================================
+    def show_scan_progress(self) -> None:
+        """Show the progress bar frame and disable the analyze button."""
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Starting scan...")
+        self.progress_frame.setVisible(True)
+        self.analyze_button.setEnabled(False)
+        self.analyze_button.setText("⏳ Scanning...")
+
+    def update_scan_progress(self, current: int, total: int, filename: str) -> None:
+        """Update progress bar and label (called from ScanWorker signal)."""
+        if total > 0:
+            pct = int((current / total) * 100)
+            self.progress_bar.setValue(pct)
+        self.progress_label.setText(f"({current}/{total})  {filename}")
+
+    def hide_scan_progress(self, result: dict | None = None) -> None:
+        """Hide progress bar frame, re-enable analyze, show summary."""
+        self.progress_frame.setVisible(False)
+        self.analyze_button.setEnabled(True)
+        self.analyze_button.setText("Select .eml Folder & Analyze")
+
+        if result:
+            scanned = result.get("emails_scanned", 0)
+            new     = result.get("emails_new", 0)
+            iocs    = result.get("iocs_found", 0)
+            was_cancelled = result.get("cancelled", False)
+
+            status = "Cancelled" if was_cancelled else "Complete"
+            self.record_count_label.setText(
+                f"{status}: {scanned} scanned, {new} new emails, {iocs} IOCs"
+            )
+
+    def update_kpi_from_db(self, db: "Database") -> None:  # noqa: F821
+        """Refresh KPI cards from the database after a scan."""
+        email_count = db.get_email_count()
+        ip_count    = db.get_ioc_count_by_type("ipv4") + db.get_ioc_count_by_type("ipv6")
+        domain_count = db.get_ioc_count_by_type("domain")
+
+        if "total_emails" in self.kpi_cards:
+            self.kpi_cards["total_emails"].setText(str(email_count))
+        if "unique_ips" in self.kpi_cards:
+            self.kpi_cards["unique_ips"].setText(str(ip_count))
+        if "unique_domains" in self.kpi_cards:
+            self.kpi_cards["unique_domains"].setText(str(domain_count))
+
+    def populate_table_from_db(self, db: "Database") -> None:  # noqa: F821
+        """Populate the IOC table directly from the database.
+
+        Each row = one email, with IOC columns collapsed from the join.
+        """
+        emails = db.get_all_emails_with_iocs()
+        self.table.setRowCount(len(emails))
+
+        for row_idx, email in enumerate(emails):
+            # Col 0: File Name
+            fn_item = QTableWidgetItem(email.get("filename", ""))
+            fn_item.setFont(QFont("Consolas", 10))
+            self.table.setItem(row_idx, 0, fn_item)
+
+            # Col 1: Extracted IPs
+            ip_item = QTableWidgetItem(email.get("ioc_ips", ""))
+            ip_item.setFont(QFont("Consolas", 9))
+            ip_item.setForeground(QColor("#38bdf8"))
+            self.table.setItem(row_idx, 1, ip_item)
+
+            # Col 2: Extracted Domains
+            dom_item = QTableWidgetItem(email.get("ioc_domains", ""))
+            dom_item.setFont(QFont("Consolas", 9))
+            dom_item.setForeground(QColor("#a78bfa"))
+            self.table.setItem(row_idx, 2, dom_item)
+
+            # Col 3: Extracted Hashes
+            hash_item = QTableWidgetItem(email.get("ioc_hashes", ""))
+            hash_item.setFont(QFont("Consolas", 9))
+            hash_item.setForeground(QColor("#f59e0b"))
+            self.table.setItem(row_idx, 3, hash_item)
+
+            self.table.setRowHeight(row_idx, 46)
+
+        self.record_count_label.setText(f"{len(emails)} Email(s) Stored")
+
