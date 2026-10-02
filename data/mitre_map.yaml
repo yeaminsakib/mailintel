@@ -1,0 +1,179 @@
+# ──────────────────────────────────────────────────────────────────────
+# MailIntel — MITRE ATT&CK Technique Mapping
+#
+# Maps observable behaviours detected during email analysis to ATT&CK
+# technique IDs and human-readable names.
+#
+# Each top-level key is a "behaviour tag" emitted by the scoring engine,
+# the IOC engine, or the enrichment layer.  The mapper looks up every
+# observed tag and returns the union of matching techniques.
+#
+# Reference: MITRE ATT&CK Enterprise v14
+# https://attack.mitre.org/techniques/enterprise/
+# ──────────────────────────────────────────────────────────────────────
+
+# ── Initial Access ─────────────────────────────────────────────────
+
+phishing_attachment:
+  technique_id: "T1566.001"
+  name: "Phishing: Spear-phishing Attachment"
+  tactic: "Initial Access"
+  description: >
+    Email contains a potentially malicious attachment (executable,
+    macro-enabled document, script, or disk image).
+
+phishing_link:
+  technique_id: "T1566.002"
+  name: "Phishing: Spear-phishing Link"
+  tactic: "Initial Access"
+  description: >
+    Email body or HTML contains one or more suspicious URLs pointing
+    to external resources (credential harvesting, malware download).
+
+phishing_service:
+  technique_id: "T1566.003"
+  name: "Phishing: Spear-phishing via Service"
+  tactic: "Initial Access"
+  description: >
+    Phishing delivered via a third-party service (e.g. cloud storage
+    sharing link, collaboration tool notification).
+
+# ── Execution ──────────────────────────────────────────────────────
+
+user_execution_attachment:
+  technique_id: "T1204.002"
+  name: "User Execution: Malicious File"
+  tactic: "Execution"
+  description: >
+    User is expected to open a malicious file attachment
+    (executable, script, or document with macros).
+
+user_execution_link:
+  technique_id: "T1204.001"
+  name: "User Execution: Malicious Link"
+  tactic: "Execution"
+  description: >
+    User is expected to click a link leading to malware
+    download or credential harvesting.
+
+macro_execution:
+  technique_id: "T1059.005"
+  name: "Command and Scripting Interpreter: Visual Basic"
+  tactic: "Execution"
+  description: >
+    Attachment is a macro-enabled Office document (xlsm, docm, etc.)
+    that may execute VBA macros on open.
+
+script_execution:
+  technique_id: "T1059.007"
+  name: "Command and Scripting Interpreter: JavaScript"
+  tactic: "Execution"
+  description: >
+    Attachment is a JavaScript, VBScript, or Windows Script File
+    that executes on the host when opened.
+
+powershell_execution:
+  technique_id: "T1059.001"
+  name: "Command and Scripting Interpreter: PowerShell"
+  tactic: "Execution"
+  description: >
+    Attachment is a PowerShell script (.ps1) capable of arbitrary
+    code execution.
+
+# ── Defence Evasion ────────────────────────────────────────────────
+
+masquerading:
+  technique_id: "T1036"
+  name: "Masquerading"
+  tactic: "Defence Evasion"
+  description: >
+    Sender domain is a lookalike / typosquat of a known brand,
+    or the Reply-To address deliberately mismatches the From header.
+
+masquerading_double_extension:
+  technique_id: "T1036.007"
+  name: "Masquerading: Double File Extension"
+  tactic: "Defence Evasion"
+  description: >
+    Attachment uses a double file extension to disguise its true type
+    (e.g. invoice.pdf.exe).
+
+disk_image_delivery:
+  technique_id: "T1553.005"
+  name: "Subvert Trust Controls: Mark-of-the-Web Bypass"
+  tactic: "Defence Evasion"
+  description: >
+    Attachment is a disk image (.iso, .img, .vhd) used to bypass
+    Mark-of-the-Web protections on extracted files.
+
+html_smuggling:
+  technique_id: "T1027.006"
+  name: "Obfuscated Files or Information: HTML Smuggling"
+  tactic: "Defence Evasion"
+  description: >
+    HTML attachment or body contains encoded/obfuscated payloads
+    that are assembled client-side.
+
+# ── Collection ─────────────────────────────────────────────────────
+
+credential_harvesting:
+  technique_id: "T1056.004"
+  name: "Input Capture: Credential API Hooking"
+  tactic: "Collection"
+  description: >
+    Email links to a credential harvesting page impersonating a
+    legitimate login portal.
+
+# ── Command and Control ───────────────────────────────────────────
+
+c2_domain:
+  technique_id: "T1071.001"
+  name: "Application Layer Protocol: Web Protocols"
+  tactic: "Command and Control"
+  description: >
+    IOC domain or IP has been flagged as command-and-control
+    infrastructure by threat intelligence providers.
+
+newly_registered_domain:
+  technique_id: "T1583.001"
+  name: "Acquire Infrastructure: Domains"
+  tactic: "Resource Development"
+  description: >
+    Domain was registered very recently, which is a strong indicator
+    of purpose-built phishing or C2 infrastructure.
+
+# ── Impact ─────────────────────────────────────────────────────────
+
+malware_delivery:
+  technique_id: "T1105"
+  name: "Ingress Tool Transfer"
+  tactic: "Command and Control"
+  description: >
+    Email or associated IOCs indicate malware delivery (attachment
+    hash matched in MalwareBazaar, or URL flagged by URLhaus).
+
+# ── Authentication Abuse ──────────────────────────────────────────
+
+spf_failure:
+  technique_id: "T1586.002"
+  name: "Compromise Accounts: Email Accounts"
+  tactic: "Resource Development"
+  description: >
+    SPF check failed — sender IP is not authorised by the purported
+    sending domain, indicating possible email spoofing.
+
+dkim_failure:
+  technique_id: "T1586.002"
+  name: "Compromise Accounts: Email Accounts"
+  tactic: "Resource Development"
+  description: >
+    DKIM check failed — email signature is invalid or missing,
+    indicating tampering or spoofing.
+
+dmarc_failure:
+  technique_id: "T1586.002"
+  name: "Compromise Accounts: Email Accounts"
+  tactic: "Resource Development"
+  description: >
+    DMARC check failed — alignment between SPF/DKIM domains and
+    the From header domain has broken.

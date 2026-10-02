@@ -1,0 +1,86 @@
+# ──────────────────────────────────────────────────────────────────────
+# MailIntel — Risk Scoring Weights
+#
+# Every factor has a `max_points` ceiling.  The scoring engine clamps
+# each contribution to [0, max_points] and the final per-IOC / per-email
+# score is clamped to [0, 100].
+#
+# Edit this file to retune the model — no code changes required.
+# ──────────────────────────────────────────────────────────────────────
+
+# ── Enrichment-based factors (per-IOC) ─────────────────────────────
+virustotal:
+  max_points: 30
+  # Points scale linearly: (malicious_engines / total_engines) * max_points
+  # A single malicious detection adds at least `min_hit_points`.
+  min_hit_points: 5
+
+abuseipdb:
+  max_points: 20
+  # Points = (confidence_score / 100) * max_points
+  # confidence_score comes directly from AbuseIPDB (0-100).
+
+domain_age:
+  max_points: 15
+  # Thresholds (in days) map to point fractions of max_points.
+  newly_registered_days: 7       # full max_points
+  recently_registered_days: 30   # 70 % of max_points
+  young_domain_days: 90          # 40 % of max_points
+
+# ── Email header / authentication factors ──────────────────────────
+auth_failure:
+  max_points: 15
+  spf_fail:   6
+  dkim_fail:  5
+  dmarc_fail: 8
+  # Points are additive — a triple failure earns
+  # min(spf_fail + dkim_fail + dmarc_fail, max_points).
+
+reply_to_mismatch:
+  max_points: 10
+  # Full max_points when From domain ≠ Reply-To domain.
+
+# ── Content / attachment factors ───────────────────────────────────
+dangerous_attachment:
+  max_points: 15
+  # Full max_points for any attachment whose extension is in the
+  # dangerous set below.
+  extensions:
+    - .exe
+    - .scr
+    - .bat
+    - .cmd
+    - .ps1
+    - .vbs
+    - .js
+    - .wsf
+    - .hta
+    - .msi
+    - .dll
+    - .com
+    - .pif
+    - .lnk
+    - .iso
+    - .img
+    - .vhd
+    - .cab
+  macro_extensions:
+    - .xlsm
+    - .docm
+    - .pptm
+    - .xlam
+    - .dotm
+  macro_points: 12
+
+# ── Lookalike / typosquat detection ────────────────────────────────
+lookalike:
+  max_points: 15
+  levenshtein_threshold: 2       # edit distance ≤ threshold → suspect
+  homoglyph_points: 15           # homoglyph substitution detected
+  levenshtein_points: 12         # close Levenshtein distance detected
+
+# ── Frequency-based factor ─────────────────────────────────────────
+ioc_frequency:
+  max_points: 10
+  # Points = min(frequency / high_freq_threshold * max_points, max_points)
+  high_freq_threshold: 20

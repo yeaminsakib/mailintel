@@ -1,0 +1,78 @@
+# ──────────────────────────────────────────────────────────────────────
+# MailIntel — Protected Brand Domains
+#
+# One domain per line (case-insensitive, without "www." prefix).
+# The typosquat / lookalike detector compares extracted domains against
+# this list using Levenshtein distance and homoglyph substitution.
+#
+# Add your organisation's domains and any brands frequently targeted
+# by phishing campaigns that are relevant to your environment.
+# ──────────────────────────────────────────────────────────────────────
+
+# ── Financial ──────────────────────────────────────────────────────
+paypal.com
+chase.com
+bankofamerica.com
+wellsfargo.com
+citibank.com
+hsbc.com
+barclays.com
+capitalone.com
+americanexpress.com
+usbank.com
+td.com
+rbc.com
+scotiabank.com
+bnpparibas.com
+
+# ── Technology ─────────────────────────────────────────────────────
+microsoft.com
+apple.com
+google.com
+amazon.com
+netflix.com
+facebook.com
+instagram.com
+linkedin.com
+twitter.com
+dropbox.com
+zoom.us
+slack.com
+github.com
+adobe.com
+salesforce.com
+oracle.com
+ibm.com
+sap.com
+
+# ── Cloud & SaaS ──────────────────────────────────────────────────
+office365.com
+outlook.com
+onedrive.com
+sharepoint.com
+icloud.com
+drive.google.com
+box.com
+docusign.com
+
+# ── E-commerce & Delivery ─────────────────────────────────────────
+ebay.com
+walmart.com
+alibaba.com
+aliexpress.com
+fedex.com
+ups.com
+usps.com
+dhl.com
+
+# ── Telecom ────────────────────────────────────────────────────────
+att.com
+verizon.com
+t-mobile.com
+
+# ── Government & Services ─────────────────────────────────────────
+irs.gov
+ssa.gov
+nhs.uk
+hmrc.gov.uk
+gov.uk
