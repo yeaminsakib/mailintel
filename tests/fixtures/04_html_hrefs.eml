@@ -1,0 +1,16 @@
+From: IT Support Desk <support@internal-it-helpdesk.com>
+To: target-analyst@enterprise.local
+Subject: Password Expiry Notification
+Date: Wed, 14 Oct 2026 09:15:00 +0000
+Message-ID: <msg04.fixture@internal-it-helpdesk.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html>
+  <body>
+    <h2>IT Services Notification</h2>
+    <p>Your network password will expire in 2 hours.</p>
+    <p><a href="https://phishing-portal.xyz/verify-account">Keep Existing Password</a></p>
+    <p>Alternate access: <a href="http://198.51.100.88/portal">IP Fallback Portal</a></p>
+  </body>
+</html>

@@ -11,12 +11,11 @@ from core.ioc.extractors import (
     extract_email_addresses,
     extract_ipv4,
     extract_ipv6,
-    extract_urls,
 )
 from core.ioc.whitelist import WhitelistPolicy
 from core.parser.models import ParsedEmail
-from .database import Database
 
+from .database import Database
 
 # Module-level whitelist loaded once
 _WHITELIST = WhitelistPolicy.load()

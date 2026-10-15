@@ -313,9 +313,19 @@ class RiskScorer:
                 if age_factor.points >= self._w("domain_age", "max_points", 15) * 0.9:
                     tags.append("newly_registered_domain")
 
-        # 4. Lookalike / typosquat (domain IOCs only)
+        # 4. Lookalike / typosquat (domain IOCs or domain in URL)
+        check_domain = None
         if ioc_type == "domain":
-            lookalike_factor = self._score_lookalike(ioc_value)
+            check_domain = ioc_value
+        elif ioc_type == "url":
+            try:
+                rest = ioc_value.split("://", 1)[1] if "://" in ioc_value else ioc_value
+                check_domain = rest.split("/")[0].split("?")[0].split("#")[0].split(":")[0].lower()
+            except Exception:
+                check_domain = None
+
+        if check_domain:
+            lookalike_factor = self._score_lookalike(check_domain)
             if lookalike_factor:
                 breakdown.append(lookalike_factor)
                 tags.append("masquerading")
@@ -341,7 +351,7 @@ class RiskScorer:
         from_addr: str = "",
         reply_to: str = "",
         attachments: list[dict[str, str]] | None = None,
-        ioc_scores: dict[str, "IocScore"] | None = None,
+        ioc_scores: dict[str, IocScore] | None = None,
         urls: list[str] | None = None,
     ) -> EmailScore:
         """Compute the risk score for a whole email.

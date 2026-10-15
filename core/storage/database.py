@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from core.parser.models import ParsedEmail
-from .schema import SCHEMA_SQL
 
+from .schema import SCHEMA_SQL
 
 # Default DB path — resolved relative to the project root so tests can
 # override it trivially by passing a tmp_path / :memory: connection.
@@ -179,6 +179,21 @@ class Database:
         cur = self._conn.execute("SELECT COUNT(*) FROM emails")
         return cur.fetchone()[0]
 
+    def get_recent_emails(self, limit: int = 150) -> list[dict[str, Any]]:
+        """Return most recently ingested emails ordered by id descending."""
+        cur = self._conn.execute(
+            """
+            SELECT id, file_sha256, filename, filepath, headers_json,
+                   auth_json, received_json, first_hop_ip, url_count,
+                   attach_count, first_seen, last_seen
+            FROM emails
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
     # ------------------------------------------------------------------
     # iocs
     # ------------------------------------------------------------------
@@ -234,6 +249,33 @@ class Database:
         )
         return cur.fetchone()[0]
 
+    def get_ioc(self, ioc_id: int) -> dict[str, Any] | None:
+        """Return a single IOC by id, or None if not found."""
+        cur = self._conn.execute("SELECT * FROM iocs WHERE id = ?", (ioc_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def get_filtered_iocs(
+        self,
+        ioc_type: str = "",
+        search: str = "",
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Return IOC rows matching type and search filters, ordered by frequency."""
+        query = "SELECT * FROM iocs WHERE 1=1"
+        params: list[Any] = []
+        if ioc_type and ioc_type.lower() != "all":
+            query += " AND type = ?"
+            params.append(ioc_type.lower())
+        if search:
+            query += " AND value LIKE ?"
+            params.append(f"%{search}%")
+        query += " ORDER BY frequency DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        cur = self._conn.execute(query, tuple(params))
+        return [dict(r) for r in cur.fetchall()]
+
     # ------------------------------------------------------------------
     # email_iocs
     # ------------------------------------------------------------------
@@ -271,6 +313,46 @@ class Database:
             ORDER BY i.frequency DESC
             """,
             (email_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_iocs_for_emails(
+        self, email_ids: list[int]
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Return all IOC records grouped by email_id for a list of email IDs."""
+        if not email_ids:
+            return {}
+        placeholders = ",".join("?" for _ in email_ids)
+        cur = self._conn.execute(
+            f"""
+            SELECT i.id, i.type, i.value, i.frequency, i.first_seen, i.last_seen,
+                   ei.email_id, ei.context
+            FROM iocs i
+            JOIN email_iocs ei ON ei.ioc_id = i.id
+            WHERE ei.email_id IN ({placeholders})
+            ORDER BY i.frequency DESC
+            """,
+            tuple(email_ids),
+        )
+        result: dict[int, list[dict[str, Any]]] = {}
+        for r in cur.fetchall():
+            row_dict = dict(r)
+            eid = row_dict["email_id"]
+            result.setdefault(eid, []).append(row_dict)
+        return result
+
+    def get_emails_for_ioc(self, ioc_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        """Return emails associated with a specific IOC."""
+        cur = self._conn.execute(
+            """
+            SELECT e.id, e.filename, e.filepath, e.first_seen, ei.context
+            FROM emails e
+            JOIN email_iocs ei ON ei.email_id = e.id
+            WHERE ei.ioc_id = ?
+            ORDER BY e.first_seen DESC
+            LIMIT ?
+            """,
+            (ioc_id, limit),
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -356,6 +438,32 @@ class Database:
             (ioc_id,),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    def get_enrichment_stats(self) -> dict[str, dict[str, Any]]:
+        """Return aggregate enrichment statistics grouped by provider."""
+        cur = self._conn.execute(
+            """
+            SELECT
+                provider,
+                COUNT(*) AS total,
+                SUM(CASE WHEN verdict = 'malicious' THEN 1 ELSE 0 END) AS malicious,
+                SUM(CASE WHEN verdict = 'suspicious' THEN 1 ELSE 0 END) AS suspicious,
+                SUM(CASE WHEN verdict = 'clean'      THEN 1 ELSE 0 END) AS clean,
+                MAX(fetched_at) AS last_fetched
+            FROM enrichments
+            GROUP BY provider
+            """
+        )
+        results: dict[str, dict[str, Any]] = {}
+        for r in cur.fetchall():
+            results[r["provider"]] = {
+                "total": r["total"] or 0,
+                "malicious": r["malicious"] or 0,
+                "suspicious": r["suspicious"] or 0,
+                "clean": r["clean"] or 0,
+                "last_fetched": r["last_fetched"] or "",
+            }
+        return results
 
     # ------------------------------------------------------------------
     # cases
@@ -471,6 +579,11 @@ class Database:
             (case_id,),
         )
         return cur.fetchone()[0]
+
+    def delete_case(self, case_id: int) -> None:
+        """Delete an investigation case by id."""
+        self._conn.execute("DELETE FROM cases WHERE id = ?", (case_id,))
+        self._auto_commit()
 
 
 # ---------------------------------------------------------------------------

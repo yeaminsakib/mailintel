@@ -98,7 +98,7 @@ class WhitelistPolicy:
 
         if _HAS_YAML and yaml_path.is_file():
             try:
-                with open(yaml_path, "r", encoding="utf-8") as f:
+                with open(yaml_path, encoding="utf-8") as f:
                     config = yaml.safe_load(f) or {}
                 return cls(config)
             except Exception:

@@ -52,7 +52,6 @@ class RDAPProvider(BaseProvider):
 
         # Extract event dates
         registration_date = _extract_event_date(data, "registration")
-        last_changed = _extract_event_date(data, "last changed")
         expiration_date = _extract_event_date(data, "expiration")
 
         # Registrar

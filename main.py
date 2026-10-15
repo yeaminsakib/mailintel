@@ -12,14 +12,13 @@ are refreshed from SQLite, not from in-memory dicts.
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
-from app.theme import DARK_THEME_QSS
 from app.dashboard import DashboardWindow
+from app.theme import DARK_THEME_QSS
 from app.workers import ScanWorker
 from core.storage.database import Database
-
 
 # Resolve DB path relative to this file (project root)
 _DB_PATH: Path = Path(__file__).resolve().parent / "mailintel.db"

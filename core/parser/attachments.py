@@ -66,7 +66,7 @@ def extract_attachments(msg: EmailMessage) -> list[AttachmentInfo]:
 
         try:
             payload = part.get_payload(decode=True)
-            if payload is None:
+            if not isinstance(payload, bytes):
                 continue
         except Exception:
             # Malformed attachment — skip without crashing

@@ -17,7 +17,6 @@ from __future__ import annotations
 import ipaddress
 import re
 
-
 # ---------- IPv4 ----------
 _RE_IPV4 = re.compile(
     r"\b((?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}"

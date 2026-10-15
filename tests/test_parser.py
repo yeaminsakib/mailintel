@@ -14,13 +14,9 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
 from typing import Any
 
-import pytest
-
-from core.parser import parse_eml_file, parse_eml_bytes, ParsedEmail
-
+from core.parser import ParsedEmail, parse_eml_bytes, parse_eml_file
 
 # ---------------------------------------------------------------------------
 # Helpers

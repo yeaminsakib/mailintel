@@ -14,7 +14,7 @@ Data models
 .. autoclass:: AttachmentInfo
 .. autoclass:: FileHashes
 """
-from .eml_parser import parse_eml_file, parse_eml_bytes
+from .eml_parser import parse_eml_bytes, parse_eml_file
 from .models import (
     AttachmentInfo,
     AuthResults,

@@ -1,0 +1,13 @@
+From: Billing Service <invoices@unauthorized-sender.com>
+To: target-analyst@enterprise.local
+Subject: Invoice Overdue #88419
+Date: Wed, 14 Oct 2026 09:25:00 +0000
+Message-ID: <msg06.fixture@unauthorized-sender.com>
+Received-SPF: fail (domain of unauthorized-sender.com does not designate 198.51.100.99 as permitted sender)
+Authentication-Results: mx.enterprise.local;
+ spf=fail smtp.mailfrom=unauthorized-sender.com;
+ dkim=fail header.d=unauthorized-sender.com;
+ dmarc=fail (p=reject) header.from=unauthorized-sender.com
+Content-Type: text/plain; charset="utf-8"
+
+Payment failed. Update details at http://rogue-payment-gateway.biz/pay

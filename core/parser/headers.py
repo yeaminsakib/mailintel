@@ -16,7 +16,6 @@ from email.message import EmailMessage
 
 from .models import AuthResults, HeaderInfo, ReceivedHop
 
-
 # ---------------------------------------------------------------------------
 # Received-header regex helpers
 # ---------------------------------------------------------------------------

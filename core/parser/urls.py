@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
-
 # ---------------------------------------------------------------------------
 # Regex for plain-text URL extraction
 # ---------------------------------------------------------------------------

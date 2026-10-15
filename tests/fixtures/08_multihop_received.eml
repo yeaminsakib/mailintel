@@ -1,0 +1,13 @@
+From: Vendor Partner <ops@vendor-partner.org>
+To: target-analyst@enterprise.local
+Subject: Delivery Status Update
+Date: Wed, 14 Oct 2026 09:35:00 +0000
+Message-ID: <msg08.fixture@vendor-partner.org>
+Received: from internal-app.local (10.0.1.5) by mailhub.local (10.0.1.2); Wed, 14 Oct 2026 09:35:05 +0000
+Received: from perimeter-relay.enterprise.local (192.168.1.10) by internal-app.local (10.0.1.5); Wed, 14 Oct 2026 09:35:03 +0000
+Received: from edge-firewall.enterprise.local (185.220.101.5) by perimeter-relay.enterprise.local (192.168.1.10); Wed, 14 Oct 2026 09:35:01 +0000
+Received: from outbound.vendor-partner.org (89.160.20.156) by edge-firewall.enterprise.local (185.220.101.5); Wed, 14 Oct 2026 09:34:58 +0000
+
+Content-Type: text/plain; charset="utf-8"
+
+Package tracking link: http://track-logistics-system.com/trace/9921

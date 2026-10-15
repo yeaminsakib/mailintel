@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.storage.database import Database
-from .models import EnrichmentResult
 
+from .models import EnrichmentResult
 
 # Default TTL for cached enrichment results
 DEFAULT_TTL: timedelta = timedelta(hours=24)

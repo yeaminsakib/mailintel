@@ -1,0 +1,20 @@
+From: Human Resources <hr@corporate-benefit.com>
+To: target-analyst@enterprise.local
+Subject: Annual Review Form Attached
+Date: Wed, 14 Oct 2026 09:20:00 +0000
+Message-ID: <msg05.fixture@corporate-benefit.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="====_BOUNDARY_MAILINTEL_5_===="
+
+--====_BOUNDARY_MAILINTEL_5_====
+Content-Type: text/plain; charset="utf-8"
+
+Please review the attached statement.
+
+--====_BOUNDARY_MAILINTEL_5_====
+Content-Type: text/plain; name="harmless_notice.txt"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="harmless_notice.txt"
+
+TWFpbEludGVsIEhhcm1sZXNzIFN5bnRoZXRpYyBBdHRhY2htZW50IFRlc3QgTm90aWNlLiBTYWZlIHZlcmlmaWNhdGlvbiBieXRlIHNlcXVlbmNlIDIwMjYuCg==
+--====_BOUNDARY_MAILINTEL_5_====--

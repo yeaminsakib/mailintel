@@ -16,7 +16,6 @@ Tests cover:
 """
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -24,9 +23,8 @@ from unittest.mock import patch
 import pytest
 import responses
 
-from core.enrichment.abuseipdb import AbuseIPDBProvider
 from core.enrichment.abusech import AbuseCHProvider
-from core.enrichment.base import BaseProvider
+from core.enrichment.abuseipdb import AbuseIPDBProvider
 from core.enrichment.cache import EnrichmentCache
 from core.enrichment.keys import get_api_key, set_api_key
 from core.enrichment.manager import EnrichmentManager
@@ -36,7 +34,6 @@ from core.enrichment.rate_limiter import RateLimiter
 from core.enrichment.rdap import RDAPProvider
 from core.enrichment.virustotal import VirusTotalProvider
 from core.storage.database import Database
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -696,3 +693,108 @@ class TestKeyManagement:
     def test_get_key_empty_string(self, mock_keyring) -> None:
         mock_keyring.get_password.return_value = ""
         assert get_api_key("virustotal") is None
+
+    @patch("core.enrichment.keys.keyring")
+    def test_delete_api_key(self, mock_keyring) -> None:
+        from core.enrichment.keys import delete_api_key
+        mock_keyring.delete_password.return_value = None
+        assert delete_api_key("virustotal") is True
+
+    @patch("core.enrichment.keys.keyring")
+    def test_keyring_error_handling(self, mock_keyring) -> None:
+        from keyring.errors import KeyringError
+        from core.enrichment.keys import delete_api_key
+
+        mock_keyring.get_password.side_effect = KeyringError("read failed")
+        mock_keyring.set_password.side_effect = KeyringError("write failed")
+        mock_keyring.delete_password.side_effect = KeyringError("delete failed")
+
+        assert get_api_key("virustotal") is None
+        assert set_api_key("virustotal", "secret") is False
+        assert delete_api_key("virustotal") is False
+
+
+class TestRDAPExtended:
+    @responses.activate
+    def test_rdap_connectivity_success(self) -> None:
+        provider = RDAPProvider()
+        responses.add(
+            responses.GET,
+            "https://rdap.org/domain/example.com",
+            status=200,
+        )
+        ok, msg = provider.test_connectivity()
+        assert ok is True
+        assert "200" in msg
+
+    @responses.activate
+    def test_rdap_connectivity_http_error(self) -> None:
+        provider = RDAPProvider()
+        responses.add(
+            responses.GET,
+            "https://rdap.org/domain/example.com",
+            status=503,
+        )
+        ok, msg = provider.test_connectivity()
+        assert ok is False
+        assert "503" in msg
+
+    def test_rdap_connectivity_network_exception(self) -> None:
+        import requests
+        provider = RDAPProvider()
+        with patch.object(provider._session, "get", side_effect=requests.RequestException("Network down")):
+            ok, msg = provider.test_connectivity()
+            assert ok is False
+            assert "Connection failed" in msg
+
+    def test_rdap_vcard_registrar_and_age_buckets(self) -> None:
+        from unittest.mock import MagicMock
+        provider = RDAPProvider()
+        now = datetime.now(timezone.utc)
+        
+        # Test 20 days old (< 30) with vcard registrar
+        reg_20d = (now - timedelta(days=20)).isoformat()
+        exp_100d = (now + timedelta(days=100)).isoformat()
+        raw_data = {
+            "events": [
+                {"eventAction": "registration", "eventDate": reg_20d},
+                {"eventAction": "expiration", "eventDate": exp_100d},
+                {"eventAction": "last changed", "eventDate": "invalid-date-format"},
+            ],
+            "entities": [
+                {
+                    "roles": ["registrar"],
+                    "vcardArray": ["vcard", [["fn", {}, "text", "Awesome Registrar Inc."]]],
+                }
+            ],
+        }
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = raw_data
+        res = provider._normalize("domain", "test20.com", mock_resp)
+        assert res.verdict == "suspicious"
+        assert res.score == 70.0
+        assert "recently_registered" in res.tags
+        assert "registrar:Awesome Registrar Inc." in res.tags
+
+        # Test 60 days old (< 90) with handle registrar fallback
+        reg_60d = (now - timedelta(days=60)).isoformat()
+        raw_data_60 = {
+            "events": [{"eventAction": "registration", "eventDate": reg_60d}],
+            "entities": [{"roles": ["registrar"], "handle": "REG-1234"}],
+        }
+        mock_resp60 = MagicMock()
+        mock_resp60.json.return_value = raw_data_60
+        res_60 = provider._normalize("domain", "test60.com", mock_resp60)
+        assert res_60.verdict == "suspicious"
+        assert res_60.score == 40.0
+        assert "young_domain" in res_60.tags
+        assert "registrar:REG-1234" in res_60.tags
+
+        # Test 200 days old (< 365)
+        reg_200d = (now - timedelta(days=200)).isoformat()
+        mock_resp200 = MagicMock()
+        mock_resp200.json.return_value = {"events": [{"eventAction": "registration", "eventDate": reg_200d}]}
+        res_200 = provider._normalize("domain", "test200.com", mock_resp200)
+        assert res_200.verdict == "clean"
+        assert res_200.score == 15.0
+

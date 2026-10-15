@@ -1,0 +1,6 @@
+IOC_Category,True_Positives,False_Positives,False_Negatives,Precision,Recall,F1_Score
+IPV4,9,0,5,1.0000,0.6429,0.7826
+DOMAIN,22,4,0,0.8462,1.0000,0.9167
+URL,15,0,0,1.0000,1.0000,1.0000
+EMAIL,18,0,0,1.0000,1.0000,1.0000
+OVERALL,64,4,5,0.9412,0.9275,0.9343

@@ -1,0 +1,10 @@
+From: PayPal Security <service@paypa1.com>
+To: target-analyst@enterprise.local
+Subject: Account Suspended Pending Identity Proof
+Date: Wed, 14 Oct 2026 09:40:00 +0000
+Message-ID: <msg09.fixture@paypa1.com>
+Content-Type: text/plain; charset="utf-8"
+
+Your PayPal account was locked due to unusual access.
+Resolve immediately: http://paypa1.com/restore-access
+

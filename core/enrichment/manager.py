@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
 
 from core.storage.database import Database
 
-from .abuseipdb import AbuseIPDBProvider
 from .abusech import AbuseCHProvider
+from .abuseipdb import AbuseIPDBProvider
 from .base import BaseProvider
 from .cache import EnrichmentCache
 from .keys import get_api_key
@@ -80,11 +79,12 @@ class EnrichmentManager:
         ioc_type: str,
         ioc_value: str,
         provider_names: list[str] | None = None,
+        force_refresh: bool = False,
     ) -> list[EnrichmentResult]:
         """Enrich a single IOC across all (or selected) providers.
 
         Steps per provider:
-        1. Check SQLite cache.  If hit and not expired → return cached.
+        1. Check SQLite cache (unless force_refresh is True).
         2. Call provider API.
         3. Write result to cache / enrichments table.
 
@@ -98,6 +98,8 @@ class EnrichmentManager:
             The IOC value.
         provider_names : list[str] or None
             Restrict to specific providers.  ``None`` = all enabled.
+        force_refresh : bool
+            When True, skip cache and re-query live APIs.
 
         Returns
         -------
@@ -115,12 +117,13 @@ class EnrichmentManager:
                 continue
 
             # 1. Cache check
-            cached = self._cache.get(ioc_id, name)
-            if cached is not None:
-                cached.ioc_type = ioc_type
-                cached.ioc_value = ioc_value
-                results.append(cached)
-                continue
+            if not force_refresh:
+                cached = self._cache.get(ioc_id, name)
+                if cached is not None:
+                    cached.ioc_type = ioc_type
+                    cached.ioc_value = ioc_value
+                    results.append(cached)
+                    continue
 
             # 2. Live query
             try:

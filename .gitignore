@@ -1,7 +1,11 @@
 # MailIntel .gitignore
 
-# Environment variables
+# Environment variables and secrets
 .env
+keys
+keys/
+*.key
+*.pem
 
 # Virtual Environment
 venv/
@@ -12,6 +16,11 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Packaging and build
+*.egg-info/
+build/
+dist/
 
 # Testing and Coverage
 .pytest_cache/
@@ -28,9 +37,11 @@ mailintel.db
 case_log/
 *.log
 Project/
+scratch/
 
 # Data and Samples
 *.eml
+!tests/fixtures/*.eml
 test_emails/
 # (Only ignoring contents of data/, we want to keep data/whitelist.yaml)
 data/*

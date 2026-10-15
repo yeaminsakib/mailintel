@@ -1,0 +1,280 @@
+{
+  "ioc_extraction": {
+    "total_samples": 14,
+    "categories": {
+      "ipv4": {
+        "tp": 9,
+        "fp": 0,
+        "fn": 5,
+        "precision": 1.0,
+        "recall": 0.6429,
+        "f1": 0.7826
+      },
+      "domain": {
+        "tp": 22,
+        "fp": 4,
+        "fn": 0,
+        "precision": 0.8462,
+        "recall": 1.0,
+        "f1": 0.9167
+      },
+      "url": {
+        "tp": 15,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "email": {
+        "tp": 18,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "overall": {
+        "tp": 64,
+        "fp": 4,
+        "fn": 5,
+        "precision": 0.9412,
+        "recall": 0.9275,
+        "f1": 0.9343
+      }
+    }
+  },
+  "scoring_evaluation": {
+    "total_samples": 100,
+    "phishing_distribution": {
+      "count": 50,
+      "mean": 22.44,
+      "median": 24.0,
+      "std": 4.61,
+      "min": 6.0,
+      "max": 25.0,
+      "q25": 24.0,
+      "q75": 24.0,
+      "iqr": 0.0
+    },
+    "ham_distribution": {
+      "count": 50,
+      "mean": 1.84,
+      "median": 0.0,
+      "std": 3.75,
+      "min": 0.0,
+      "max": 10.0,
+      "q25": 0.0,
+      "q75": 0.0,
+      "iqr": 0.0
+    },
+    "cohens_d_effect_size": 4.902,
+    "roc_auc": 0.9892,
+    "pr_auc": 0.99,
+    "optimal_threshold": 12.5,
+    "metrics_at_optimal_threshold": {
+      "threshold": 12.5,
+      "accuracy": 0.97,
+      "precision": 1.0,
+      "recall": 0.94,
+      "f1_score": 0.9691,
+      "tp": 47,
+      "fp": 0,
+      "tn": 50,
+      "fn": 3
+    },
+    "metrics_at_default_50": {
+      "threshold": 50.0,
+      "accuracy": 0.5,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1_score": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "tn": 50,
+      "fn": 50
+    }
+  },
+  "ml_comparison": {
+    "comparison": {
+      "rule_based": {
+        "accuracy": 0.5,
+        "precision": 1.0,
+        "recall": 0.0,
+        "f1_score": 0.0,
+        "roc_auc": 0.9892,
+        "pr_auc": 0.99
+      },
+      "ml_logistic_regression": {
+        "accuracy": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0,
+        "roc_auc": 1.0,
+        "pr_auc": 1.0
+      },
+      "hybrid_ensemble": {
+        "accuracy": 0.98,
+        "precision": 1.0,
+        "recall": 0.96,
+        "f1_score": 0.9796,
+        "roc_auc": 1.0,
+        "pr_auc": 1.0
+      }
+    },
+    "top_phishing_features": [
+      {
+        "feature": "hdr_spf_failed",
+        "weight": 1.3388
+      },
+      {
+        "feature": "hdr_subject_urgency",
+        "weight": 0.6618
+      },
+      {
+        "feature": "hdr_dmarc_failed",
+        "weight": 0.598
+      },
+      {
+        "feature": "hdr_dkim_failed",
+        "weight": 0.4321
+      },
+      {
+        "feature": "hdr_has_external_origin",
+        "weight": 0.3952
+      },
+      {
+        "feature": "hdr_reply_to_mismatch",
+        "weight": 0.3673
+      },
+      {
+        "feature": "body",
+        "weight": 0.0855
+      },
+      {
+        "feature": "delivery",
+        "weight": 0.0777
+      },
+      {
+        "feature": "payment",
+        "weight": 0.0733
+      },
+      {
+        "feature": "html",
+        "weight": 0.0713
+      },
+      {
+        "feature": "id",
+        "weight": 0.0676
+      },
+      {
+        "feature": "href http",
+        "weight": 0.0638
+      },
+      {
+        "feature": "bank",
+        "weight": 0.0627
+      },
+      {
+        "feature": "verify",
+        "weight": 0.0609
+      },
+      {
+        "feature": "shipping",
+        "weight": 0.0594
+      }
+    ],
+    "top_ham_features": [
+      {
+        "feature": "hdr_log_body_length",
+        "weight": -1.018
+      },
+      {
+        "feature": "hdr_num_received_hops",
+        "weight": -0.9017
+      },
+      {
+        "feature": "hdr_has_attachments",
+        "weight": -0.1039
+      },
+      {
+        "feature": "wrote",
+        "weight": -0.0503
+      },
+      {
+        "feature": "list",
+        "weight": -0.0409
+      },
+      {
+        "feature": "net",
+        "weight": -0.0406
+      },
+      {
+        "feature": "2002",
+        "weight": -0.0385
+      },
+      {
+        "feature": "original",
+        "weight": -0.037
+      },
+      {
+        "feature": "com",
+        "weight": -0.0367
+      },
+      {
+        "feature": "rpm",
+        "weight": -0.0365
+      },
+      {
+        "feature": "linux",
+        "weight": -0.0351
+      },
+      {
+        "feature": "spam",
+        "weight": -0.0335
+      },
+      {
+        "feature": "ve",
+        "weight": -0.0331
+      },
+      {
+        "feature": "message",
+        "weight": -0.0323
+      },
+      {
+        "feature": "like",
+        "weight": -0.0302
+      }
+    ]
+  },
+  "error_analysis": {
+    "threshold": 12.5,
+    "false_positives_count": 0,
+    "false_negatives_count": 3,
+    "fp_rate": 0.0,
+    "fn_rate": 0.06,
+    "top_fp_factors": {},
+    "top_fn_mechanisms": {
+      "text_only_or_callback_lure_without_urls": 3
+    },
+    "case_studies": [
+      {
+        "sample_id": "sa_ham_forwarded_digest_example",
+        "true_label": "Ham",
+        "predicted_label": "Borderline Low (Clean)",
+        "score": 25.0,
+        "root_cause": "Mailing list software rewrites From headers or relays without Sender-ID preservation.",
+        "remediation": "Contextual whitelist policy suppresses known internal relays and trusted mailing lists."
+      },
+      {
+        "sample_id": "phish_pot_003_dhl_delivery_malware_exe",
+        "true_label": "Phishing",
+        "predicted_label": "Ham (Evasion)",
+        "score": 6.0,
+        "root_cause": "Phishing lure delivered via clean cloud webmail without executable attachments or active threat intelligence feed hits at time of delivery.",
+        "remediation": "Combine rule-based score with TF-IDF urgency classifier and URL lexical heuristics (suspicious path keywords, newly observed domain age check via RDAP)."
+      }
+    ],
+    "whitelist_efficacy": "The MailIntel contextual whitelist (data/whitelist.yaml) played a critical role in minimizing false positives. Benign infrastructure domains (e.g., github.com, amazon.com, google.com, python.org) and legitimate cloud CDN links were filtered out during ingestion, preventing them from accumulating spurious reputation penalties."
+  }
+}

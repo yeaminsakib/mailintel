@@ -7,18 +7,16 @@ Uses synthetic .eml files in a temp directory – no external data needed.
 from __future__ import annotations
 
 import os
-import tempfile
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
 from core.ioc.engine import (
     _is_private_or_reserved,
     _is_whitelisted_domain,
-    parse_eml_folder,
     analyze_folder,
+    parse_eml_folder,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

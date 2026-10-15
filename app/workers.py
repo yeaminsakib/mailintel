@@ -24,7 +24,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.parser.eml_parser import parse_eml_file
 from core.storage.database import Database
-from core.storage.export import export_all_cases, export_csv_all
+from core.storage.export import export_all_cases
 from core.storage.ingest import ingest_parsed_email
 
 
@@ -167,3 +167,75 @@ class ExportWorker(QThread):
                 "files_written": [],
                 "error": str(exc),
             })
+
+
+class EnrichWorker(QThread):
+    """Background thread for live IOC enrichment and risk re-scoring.
+
+    Signals
+    -------
+    finished(data: dict)
+        Emitted when enrichment and scoring finish.
+    error(message: str)
+        Emitted if an exception occurs.
+    """
+
+    finished: pyqtSignal = pyqtSignal(dict)
+    error:    pyqtSignal = pyqtSignal(str)
+
+    def __init__(
+        self,
+        ioc_id: int,
+        ioc_type: str,
+        ioc_value: str,
+        frequency: int = 1,
+        db_path: str | None = None,
+        force_refresh: bool = True,
+        parent: Any = None,
+    ) -> None:
+        super().__init__(parent)
+        self._ioc_id = ioc_id
+        self._ioc_type = ioc_type
+        self._ioc_value = ioc_value
+        self._frequency = frequency
+        self._db_path = db_path
+        self._force_refresh = force_refresh
+
+    def run(self) -> None:
+        try:
+            from core.enrichment.manager import EnrichmentManager
+            from core.scoring.risk_score import RiskScorer
+
+            db = Database(self._db_path)
+            manager = EnrichmentManager(db)
+            manager.enrich_ioc(
+                ioc_id=self._ioc_id,
+                ioc_type=self._ioc_type,
+                ioc_value=self._ioc_value,
+                force_refresh=self._force_refresh,
+            )
+
+            stored_enrichments = db.get_enrichments_for_ioc(self._ioc_id)
+            scorer = RiskScorer()
+            score_obj = scorer.score_ioc(
+                ioc_type=self._ioc_type,
+                ioc_value=self._ioc_value,
+                enrichment_results=stored_enrichments,
+                frequency=self._frequency,
+            )
+            db.close()
+
+            self.finished.emit({
+                "ioc_id": self._ioc_id,
+                "ioc_type": self._ioc_type,
+                "ioc_value": self._ioc_value,
+                "enrichments": stored_enrichments,
+                "score": score_obj.score,
+                "breakdown": [
+                    {"factor": f.factor, "points": f.points, "reason": f.reason}
+                    for f in score_obj.breakdown
+                ],
+                "behaviour_tags": score_obj.behaviour_tags,
+            })
+        except Exception as exc:  # noqa: BLE001
+            self.error.emit(str(exc))

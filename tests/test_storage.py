@@ -25,7 +25,6 @@ from core.storage.database import Database
 from core.storage.export import export_all_cases, export_csv_all, export_csv_case
 from core.storage.ingest import ingest_parsed_email
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

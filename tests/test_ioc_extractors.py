@@ -6,12 +6,6 @@ from __future__ import annotations
 
 import pytest
 
-from core.ioc.extractors import (
-    extract_email_addresses,
-    extract_ipv4,
-    extract_ipv6,
-    extract_urls,
-)
 from core.ioc.defang import (
     defang,
     defang_email,
@@ -21,8 +15,13 @@ from core.ioc.defang import (
     refang_ip,
     refang_url,
 )
+from core.ioc.extractors import (
+    extract_email_addresses,
+    extract_ipv4,
+    extract_ipv6,
+    extract_urls,
+)
 from core.ioc.whitelist import WhitelistPolicy
-
 
 # ===================================================================
 # IPv4 Extraction

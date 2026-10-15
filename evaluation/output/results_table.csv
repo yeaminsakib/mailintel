@@ -1,0 +1,5 @@
+Model,Accuracy,Precision,Recall,F1_Score,ROC_AUC,PR_AUC,TP,FP,TN,FN
+MailIntel Rule-Based (Optimal Thresh),0.9700,1.0000,0.9400,0.9691,0.9892,0.9900,47,0,50,3
+MailIntel Rule-Based (Default 50),0.5000,1.0000,0.0000,0.0000,0.9892,0.9900,0,0,50,50
+TF-IDF + Header Logistic Regression (5-Fold CV),1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,50,0,50,0
+Hybrid Ensemble (Rule + ML),0.9800,1.0000,0.9600,0.9796,1.0000,1.0000,48,0,50,2

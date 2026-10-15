@@ -140,7 +140,7 @@ def _extract_body(msg: EmailMessage, subtype: str) -> str:
         for part in msg.walk():
             if part.get_content_type() == f"text/{subtype}":
                 payload = part.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     charset = part.get_content_charset() or "utf-8"
                     return payload.decode(charset, errors="replace")
     except Exception:

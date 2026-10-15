@@ -329,4 +329,92 @@ QScrollBar::handle:vertical:hover {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+
+QScrollBar:horizontal {
+    border: none;
+    background: #161922;
+    height: 8px;
+    margin: 0px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #334155;
+    min-width: 24px;
+    border-radius: 4px;
+}
+
+/* ---------------- CONTEXT MENU & DROPDOWNS ---------------- */
+QMenu {
+    background-color: #1a1d26;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    padding: 6px;
+    color: #e2e8f0;
+}
+
+QMenu::item {
+    padding: 8px 24px 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+QMenu::item:selected {
+    background-color: rgba(0, 240, 255, 0.15);
+    color: #00f0ff;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #283144;
+    margin: 4px 8px;
+}
+
+QComboBox {
+    background-color: #12141a;
+    border: 1px solid #2d3545;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #f1f5f9;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QComboBox:hover {
+    border: 1px solid #00f0ff;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1a1d26;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    selection-background-color: rgba(0, 240, 255, 0.2);
+    selection-color: #ffffff;
+    color: #e2e8f0;
+    padding: 4px;
+}
+
+/* ---------------- TEXT EDITORS & DIALOGS ---------------- */
+QTextEdit, QPlainTextEdit {
+    background-color: #12141a;
+    border: 1px solid #2d3545;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 12px;
+    color: #f1f5f9;
+    font-family: "Consolas", "Fira Code", monospace;
+}
+
+QTextEdit:focus, QPlainTextEdit:focus {
+    border: 1px solid #00f0ff;
+}
+
+QDialog {
+    background-color: #1a1d24;
+    color: #e2e8f0;
+}
+
+QSplitter::handle {
+    background-color: #232835;
+}
 """

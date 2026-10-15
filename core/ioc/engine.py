@@ -18,8 +18,7 @@ import datetime
 import os
 import re
 from collections import Counter
-from typing import Any, Dict, List, Set
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Compiled Regex Patterns
@@ -102,7 +101,7 @@ def _is_private_or_reserved(ip: str) -> bool:
 # ---------------------------------------------------------------------------
 
 #: Curated set of benign / infrastructure domains to exclude from results.
-DOMAIN_WHITELIST: Set[str] = {
+DOMAIN_WHITELIST: set[str] = {
     # Search & Web Giants
     "google.com", "www.google.com", "googleapis.com", "googleusercontent.com",
     "gstatic.com", "bing.com", "yahoo.com", "yandex.com",
@@ -152,7 +151,7 @@ def _is_whitelisted_domain(domain: str) -> bool:
 # Core Parsing Function
 # ---------------------------------------------------------------------------
 
-def parse_eml_folder(folder_path: str) -> Dict[str, Any]:
+def parse_eml_folder(folder_path: str) -> dict[str, Any]:
     """
     Read every ``.eml`` file in *folder_path*, extract raw IOC strings, apply
     noise-reduction filters, and return aggregated IOC data as a structured
@@ -201,7 +200,7 @@ def parse_eml_folder(folder_path: str) -> Dict[str, Any]:
     domain_counter: Counter = Counter()
     md5_counter: Counter = Counter()
     total_emails_scanned: int = 0
-    email_logs: List[Dict[str, Any]] = []  # per-email event records
+    email_logs: list[dict[str, Any]] = []  # per-email event records
 
     if not folder_path or not os.path.isdir(folder_path):
         return _build_result(total_emails_scanned, ipv4_counter, domain_counter, md5_counter, email_logs)
@@ -213,7 +212,7 @@ def parse_eml_folder(folder_path: str) -> Dict[str, Any]:
     for filename in eml_files:
         file_path = os.path.join(folder_path, filename)
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            with open(file_path, encoding="utf-8", errors="replace") as fh:
                 raw_text = fh.read()
         except OSError:
             continue  # Unreadable file – skip gracefully
@@ -278,7 +277,7 @@ def parse_eml_folder(folder_path: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _write_case_log(
-    email_logs: List[Dict[str, Any]],
+    email_logs: list[dict[str, Any]],
 ) -> str:
     """
     Create a timestamped case directory under ``<cwd>/case_log/`` and write
@@ -335,8 +334,8 @@ def _build_result(
     ipv4_counter: Counter,
     domain_counter: Counter,
     md5_counter: Counter,
-    email_logs: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    email_logs: list[dict[str, Any]],
+) -> dict[str, Any]:
     """Assemble the canonical parse_eml_folder return structure and log the case."""
     top_ips     = [{"ioc": ip, "count": c} for ip, c in ipv4_counter.most_common()]
     top_domains = [{"ioc": d,  "count": c} for d,  c in domain_counter.most_common()]
@@ -394,7 +393,7 @@ def _md5_severity(freq: int) -> str:
 # UI-facing helpers (used by app/dashboard.py / main.py)
 # ---------------------------------------------------------------------------
 
-def extract_iocs_from_folder(folder_path: str) -> List[Dict[str, Any]]:
+def extract_iocs_from_folder(folder_path: str) -> list[dict[str, Any]]:
     """
     Extracts Indicators of Compromise (IOCs) from .eml files in the specified
     directory.  Returns a JSON-serialisable list of IOC dictionaries with keys:
@@ -403,7 +402,7 @@ def extract_iocs_from_folder(folder_path: str) -> List[Dict[str, Any]]:
     return analyze_folder(folder_path)
 
 
-def analyze_folder(folder_path: str) -> List[Dict[str, Any]]:
+def analyze_folder(folder_path: str) -> list[dict[str, Any]]:
     """
     Analyses a directory of ``.eml`` files and returns a ranked IOC list ready
     for the dashboard.  Returns an **empty list** when the folder is invalid or
@@ -429,7 +428,7 @@ def analyze_folder(folder_path: str) -> List[Dict[str, Any]]:
     domain_counter: Counter = parsed["_counter_domains"]
     md5_counter: Counter   = parsed["_counter_md5"]
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     for ip, count in ipv4_counter.most_common(15):
         results.append({
