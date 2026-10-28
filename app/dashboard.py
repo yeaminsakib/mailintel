@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -228,8 +229,9 @@ class DashboardWindow(QMainWindow):
         # Connect initial selection (Index 0: Dash)
         self.select_nav_button(0)
 
-        # Initial load from real SQLite database
-        self.refresh_all_data()
+        # Do NOT pre-load DB data on startup.
+        # Data will only show after the user selects an .eml folder and scans.
+        self._clear_dash_to_empty_state()
 
     # -------------------------------------------------------------------------
     # DATABASE HELPER
@@ -482,7 +484,7 @@ class DashboardWindow(QMainWindow):
         tbl_header_box = QHBoxLayout()
         tbl_title = QLabel("Extracted Indicators of Compromise")
         tbl_title.setObjectName("sectionTitle")
-        self.record_count_label = QLabel("Loading indicators...")
+        self.record_count_label = QLabel("No data — select an .eml folder to begin analysis")
         self.record_count_label.setObjectName("recordCountLabel")
 
         tbl_header_box.addWidget(tbl_title)
@@ -559,12 +561,33 @@ class DashboardWindow(QMainWindow):
         main_splitter.setStretchFactor(1, 2)
         layout.addWidget(main_splitter, 1)
 
-        # 3. BOTTOM BUTTON & PROGRESS
+        # 3. BOTTOM BUTTON ROW & PROGRESS
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
         self.analyze_button = QPushButton("Select .eml Folder & Analyze")
         self.analyze_button.setObjectName("analyzeButton")
         self.analyze_button.setFixedHeight(44)
         self.analyze_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        layout.addWidget(self.analyze_button)
+        btn_row.addWidget(self.analyze_button, 1)
+
+        # "Add to Case" button — hidden until a scan completes
+        self.add_to_case_btn = QPushButton("📁 Add Scan Results to Case")
+        self.add_to_case_btn.setFixedHeight(44)
+        self.add_to_case_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.add_to_case_btn.setVisible(False)
+        self.add_to_case_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(16, 185, 129, 0.15); color: #10b981;
+                border: 1px solid #10b981; border-radius: 6px;
+                font-weight: 700; font-size: 12px; padding: 0 16px;
+            }
+            QPushButton:hover { background: #10b981; color: #0a0e17; }
+        """)
+        self.add_to_case_btn.clicked.connect(self.handle_add_scan_to_case)
+        btn_row.addWidget(self.add_to_case_btn)
+
+        layout.addLayout(btn_row)
 
         # Progress bar frame
         self.progress_frame = QFrame()
@@ -609,12 +632,31 @@ class DashboardWindow(QMainWindow):
     # =========================================================================
     # DASH PAGE DATA LOGIC & CONTROLLER
     # =========================================================================
+    def _clear_dash_to_empty_state(self) -> None:
+        """Reset the Dash page to an empty state (no data shown)."""
+        self.ioc_table.setRowCount(0)
+        self._scored_iocs_cache = []
+        self.record_count_label.setText("No data — select an .eml folder to begin analysis")
+        for key, default in [("total_emails", "0"), ("unique_iocs", "0"),
+                             ("high_risk", "0"), ("active_cases", "0")]:
+            if key in self.kpi_cards:
+                self.kpi_cards[key].setText(default)
+
     def load_dash_data(self) -> None:
-        """Load KPI cards and IOC table data directly from SQLite."""
+        """Load KPI cards and IOC table data directly from SQLite.
+
+        If the database has no emails yet (i.e. no scan has been run),
+        the table is left empty so the user is prompted to select a folder.
+        """
         db = self.get_db()
         try:
-            # 1. Update KPI cards
+            # 1. Check if any scan has been run
             email_count = db.get_email_count()
+            if email_count == 0:
+                # Nothing scanned yet — keep dashboard in empty state
+                self._clear_dash_to_empty_state()
+                return
+
             ioc_count = db.get_ioc_count()
             case_stats = db.get_case_stats()
 
@@ -1039,29 +1081,117 @@ class DashboardWindow(QMainWindow):
 
     def add_ioc_to_case_prompt(self, ioc_id: int, ioc_val: str) -> None:
         """Prompt user to add this IOC to an existing or new case."""
+        from PyQt6.QtWidgets import QInputDialog
         db = self.get_db()
         try:
             cases = db.get_all_cases()
             if not cases:
-                QMessageBox.information(
-                    self, "No Cases", "No cases exist yet. Please create a case in the Cases tab first."
+                reply = QMessageBox.question(
+                    self,
+                    "No Cases Found",
+                    "No investigation cases exist yet.\n\nWould you like to create a new case now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
+                if reply == QMessageBox.StandardButton.Yes:
+                    db.close()
+                    self.handle_create_case()
                 return
 
             case_titles = [f"#{c['id']}: {c['title']} ({c['status']})" for c in cases]
-            from PyQt6.QtWidgets import QInputDialog
             chosen, ok = QInputDialog.getItem(
-                self, "Add to Case", f"Select case for indicator '{ioc_val}':", case_titles, 0, False
+                self, "Add IOC to Case",
+                f"Select a case for indicator  '{ioc_val}':",
+                case_titles, 0, False,
             )
             if ok and chosen:
                 case_id = int(chosen.split(":")[0].replace("#", ""))
-                # Append to case notes
                 case = db.get_case(case_id)
                 if case:
                     existing = case.get("notes", "")
-                    updated = f"{existing}\n• [Added IOC] {ioc_val}".strip()
+                    updated = f"{existing}\n• [IOC] {ioc_val}".strip()
                     db.update_case_notes(case_id, updated)
-                    self.statusBar().showMessage(f"Added {ioc_val} to Case #{case_id}", 4000)
+                    self.statusBar().showMessage(
+                        f"✓ Added IOC '{ioc_val}' to Case #{case_id}", 4000
+                    )
+        finally:
+            db.close()
+
+    def handle_add_scan_to_case(self) -> None:
+        """Link all emails currently in the DB to a chosen case (called from Dash page)."""
+        from PyQt6.QtWidgets import QInputDialog
+        db = self.get_db()
+        try:
+            cases = db.get_all_cases()
+            if not cases:
+                reply = QMessageBox.question(
+                    self,
+                    "No Cases Found",
+                    "No investigation cases exist yet.\n\nWould you like to create a new case now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    db.close()
+                    self.handle_create_case()
+                return
+
+            case_titles = [f"#{c['id']}: {c['title']} ({c['status']})" for c in cases]
+            chosen, ok = QInputDialog.getItem(
+                self, "Add Scan Results to Case",
+                "Link all scanned emails to which case?",
+                case_titles, 0, False,
+            )
+            if ok and chosen:
+                case_id = int(chosen.split(":")[0].replace("#", ""))
+                emails = db.get_all_emails()
+                linked = 0
+                for email in emails:
+                    db.add_email_to_case(case_id, email["id"])
+                    linked += 1
+                db.batch_commit()
+                self.statusBar().showMessage(
+                    f"✓ Linked {linked} email(s) to Case #{case_id}", 5000
+                )
+        finally:
+            db.close()
+
+    def handle_add_all_db_emails_to_case(self) -> None:
+        """Add all emails in the DB to the currently selected case."""
+        if not hasattr(self, "_active_case") or not self._active_case:
+            return
+        cid = self._active_case["id"]
+        db = self.get_db()
+        try:
+            emails = db.get_all_emails()
+            if not emails:
+                QMessageBox.information(
+                    self, "No Emails",
+                    "No emails in the database yet.\nPlease scan an .eml folder first."
+                )
+                return
+            confirm = QMessageBox.question(
+                self,
+                "Confirm",
+                f"Add all {len(emails)} email(s) from the database to Case #{cid}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            for email in emails:
+                db.add_email_to_case(cid, email["id"])
+            db.batch_commit()
+            count = db.get_email_count_for_case(cid)
+            self.case_email_count_label.setText(f"📧 {count} email(s) linked")
+            linked_emails = db.get_emails_for_case(cid)
+            lines = [
+                f"{e.get('subject', '(no subject)')[:55]}  [{e.get('sender_email', '')}]"
+                for e in linked_emails[:10]
+            ]
+            if count > 10:
+                lines.append(f"... and {count - 10} more")
+            self.case_emails_list.setPlainText("\n".join(lines))
+            self.statusBar().showMessage(
+                f"✓ Added {len(emails)} email(s) to Case #{cid}", 5000
+            )
         finally:
             db.close()
 
@@ -1217,6 +1347,43 @@ class DashboardWindow(QMainWindow):
         self.case_desc_label.setWordWrap(True)
         cd_layout.addWidget(self.case_desc_label)
 
+        # --- Evidence counter + Add emails button ---
+        evidence_row = QHBoxLayout()
+        self.case_email_count_label = QLabel("📧 0 emails linked")
+        self.case_email_count_label.setStyleSheet(
+            "color: #38bdf8; font-size: 11px; font-weight: 700;"
+        )
+        evidence_row.addWidget(self.case_email_count_label)
+        evidence_row.addStretch()
+
+        self.add_db_emails_btn = QPushButton("+ Add All DB Emails")
+        self.add_db_emails_btn.setEnabled(False)
+        self.add_db_emails_btn.setFixedHeight(28)
+        self.add_db_emails_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.add_db_emails_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(16, 185, 129, 0.15); color: #10b981;
+                border: 1px solid #10b981; border-radius: 5px;
+                font-size: 11px; font-weight: 700; padding: 0 10px;
+            }
+            QPushButton:hover { background: #10b981; color: #0a0e17; }
+            QPushButton:disabled { color: #4a5568; border-color: #2d3748; background: transparent; }
+        """)
+        self.add_db_emails_btn.clicked.connect(self.handle_add_all_db_emails_to_case)
+        evidence_row.addWidget(self.add_db_emails_btn)
+        cd_layout.addLayout(evidence_row)
+
+        # Linked emails mini-list
+        self.case_emails_list = QPlainTextEdit()
+        self.case_emails_list.setReadOnly(True)
+        self.case_emails_list.setMaximumHeight(90)
+        self.case_emails_list.setPlaceholderText("No emails linked to this case yet.")
+        self.case_emails_list.setStyleSheet(
+            "background: #161920; color: #64748b; font-size: 10px; "
+            "border: 1px solid #2a3242; border-radius: 5px; padding: 4px;"
+        )
+        cd_layout.addWidget(self.case_emails_list)
+
         notes_header = QLabel("Analyst Investigation Notes:")
         notes_header.setObjectName("metricSubTitle")
         cd_layout.addWidget(notes_header)
@@ -1330,6 +1497,7 @@ class DashboardWindow(QMainWindow):
         self.case_notes_editor.setPlainText(case_data.get("notes", ""))
         self.save_notes_btn.setEnabled(True)
         self.delete_case_btn.setEnabled(True)
+        self.add_db_emails_btn.setEnabled(True)
 
         self.case_status_btn.setEnabled(True)
         if status == "open":
@@ -1338,6 +1506,25 @@ class DashboardWindow(QMainWindow):
         else:
             self.case_status_btn.setText("🔓 Reopen Case")
             self.case_status_btn.setStyleSheet("background: #1e2432; color: #00f0ff; border: 1px solid #00f0ff;")
+
+        # Show linked email count and list
+        db = self.get_db()
+        try:
+            count = db.get_email_count_for_case(cid)
+            self.case_email_count_label.setText(f"📧 {count} email(s) linked")
+            linked_emails = db.get_emails_for_case(cid)
+            if linked_emails:
+                lines = [
+                    f"{e.get('subject', '(no subject)')[:55]}  [{e.get('sender_email', '')}]"
+                    for e in linked_emails[:10]
+                ]
+                if count > 10:
+                    lines.append(f"... and {count - 10} more")
+                self.case_emails_list.setPlainText("\n".join(lines))
+            else:
+                self.case_emails_list.clear()
+        finally:
+            db.close()
 
     def handle_create_case(self) -> None:
         dlg = CreateCaseDialog(self)
@@ -1530,6 +1717,27 @@ class DashboardWindow(QMainWindow):
         """)
         self.graph_refresh_btn.clicked.connect(self.load_graph_data)
         header_layout.addWidget(self.graph_refresh_btn)
+
+        self.graph_fullscreen_btn = QPushButton("⛶ Full Page Mode")
+        self.graph_fullscreen_btn.setFixedHeight(36)
+        self.graph_fullscreen_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.graph_fullscreen_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(59, 130, 246, 0.12);
+                color: #60a5fa;
+                border: 1px solid #3b82f6;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 700;
+                padding: 6px 16px;
+            }
+            QPushButton:hover {
+                background-color: #3b82f6;
+                color: #ffffff;
+            }
+        """)
+        self.graph_fullscreen_btn.clicked.connect(self.toggle_graph_full_page)
+        header_layout.addWidget(self.graph_fullscreen_btn)
         layout.addLayout(header_layout)
 
         # 2. Filter & Legend Bar
@@ -1590,10 +1798,12 @@ class DashboardWindow(QMainWindow):
         # 3. Main Splitter: Pyvis Graph (Left) & Node Details Drawer (Right)
         self.graph_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.graph_splitter.setObjectName("graphSplitter")
+        self.graph_splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Left Container: QWebEngineView hosting the Pyvis interactive network
         self.graph_web_container = QFrame()
         self.graph_web_container.setObjectName("tableContainer")
+        self.graph_web_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.graph_web_layout = QVBoxLayout(self.graph_web_container)
         self.graph_web_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -1610,9 +1820,32 @@ class DashboardWindow(QMainWindow):
         gd_layout.setContentsMargins(18, 16, 18, 16)
         gd_layout.setSpacing(12)
 
+        drawer_hdr_layout = QHBoxLayout()
         drawer_hdr = QLabel("ENTITY DETAILS & CORRELATION")
         drawer_hdr.setObjectName("rightSidebarTitle")
-        gd_layout.addWidget(drawer_hdr)
+        drawer_hdr_layout.addWidget(drawer_hdr, 1)
+
+        self.graph_drawer_close_btn = QPushButton("✕")
+        self.graph_drawer_close_btn.setFixedSize(26, 26)
+        self.graph_drawer_close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.graph_drawer_close_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.06);
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: rgba(244, 63, 94, 0.2);
+                color: #f43f5e;
+                border-color: #f43f5e;
+            }
+        """)
+        self.graph_drawer_close_btn.clicked.connect(lambda: self.set_graph_drawer_visible(False))
+        drawer_hdr_layout.addWidget(self.graph_drawer_close_btn)
+        gd_layout.addLayout(drawer_hdr_layout)
 
         self.graph_drawer_scroll = QScrollArea()
         self.graph_drawer_scroll.setWidgetResizable(True)
@@ -1637,16 +1870,39 @@ class DashboardWindow(QMainWindow):
         gd_layout.addWidget(self.graph_drawer_scroll)
 
         self.graph_splitter.addWidget(self.graph_drawer)
-        self.graph_splitter.setStretchFactor(0, 3)
-        self.graph_splitter.setStretchFactor(1, 1)
+        self.graph_splitter.setStretchFactor(0, 1)
+        self.graph_splitter.setStretchFactor(1, 0)
+        self.graph_splitter.setCollapsible(0, False)
+        self.graph_splitter.setCollapsible(1, True)
 
         layout.addWidget(self.graph_splitter, 1)
         return page
+
+    def toggle_graph_full_page(self) -> None:
+        """Toggle graph drawer visibility to allow full-width / full-page graph inspection."""
+        is_visible = self.graph_drawer.isVisible()
+        self.set_graph_drawer_visible(not is_visible)
+
+    def set_graph_drawer_visible(self, visible: bool) -> None:
+        """Show or hide the side drawer and update the toggle button state."""
+        self.graph_drawer.setVisible(visible)
+        if visible:
+            self.graph_fullscreen_btn.setText("⛶ Full Page Mode")
+            self.graph_fullscreen_btn.setToolTip("Expand graph to occupy full width")
+        else:
+            self.graph_fullscreen_btn.setText("◧ Show Details Panel")
+            self.graph_fullscreen_btn.setToolTip("Show node details and correlation drawer")
+
+        if self.graph_web_view is not None and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.graph_web_view.page().runJavaScript(
+                "if (typeof network !== 'undefined' && network) { network.redraw(); network.fit(); }"
+            )
 
     def _ensure_graph_web_view(self) -> None:
         """Lazily initialize QWebEngineView on first demand."""
         if self.graph_web_view is None:
             self.graph_web_view = QWebEngineView(self.graph_web_container)
+            self.graph_web_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.graph_web_view.setStyleSheet("background-color: #15181e;")
             self.graph_web_view.urlChanged.connect(self._on_web_url_changed)
             self.graph_web_layout.addWidget(self.graph_web_view)
@@ -1749,6 +2005,9 @@ class DashboardWindow(QMainWindow):
         details = self.graph_builder.get_node_details(node_id)
         if not details:
             return
+
+        if not self.graph_drawer.isVisible():
+            self.set_graph_drawer_visible(True)
 
         while self.graph_drawer_vbox.count():
             item = self.graph_drawer_vbox.takeAt(0)
@@ -2431,7 +2690,7 @@ class DashboardWindow(QMainWindow):
     # GLOBAL REFRESH & PROGRESS HELPERS
     # =========================================================================
     def refresh_all_data(self, db: Database | None = None) -> None:
-        """Global refresh called after scans or on startup."""
+        """Global refresh called after a scan completes."""
         self.load_dash_data()
         self.load_cases_data()
         self.load_intel_data()
@@ -2467,8 +2726,12 @@ class DashboardWindow(QMainWindow):
             scanned = result.get("emails_scanned", 0)
             new = result.get("emails_new", 0)
             iocs = result.get("iocs_found", 0)
-            status = "Cancelled" if result.get("cancelled", False) else "Complete"
+            cancelled = result.get("cancelled", False)
+            status = "Cancelled" if cancelled else "Complete"
             self.statusBar().showMessage(
                 f"Scan {status}: {scanned} scanned, {new} new emails, {iocs} IOCs.", 6000
             )
             self.refresh_all_data()
+            # Show the "Add to Case" button after a successful scan
+            if not cancelled and new > 0:
+                self.add_to_case_btn.setVisible(True)

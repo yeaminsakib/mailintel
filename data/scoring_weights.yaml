@@ -1,14 +1,14 @@
-# ──────────────────────────────────────────────────────────────────────
-# MailIntel — Risk Scoring Weights
+﻿# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# MailIntel ΓÇö Risk Scoring Weights
 #
 # Every factor has a `max_points` ceiling.  The scoring engine clamps
 # each contribution to [0, max_points] and the final per-IOC / per-email
 # score is clamped to [0, 100].
 #
-# Edit this file to retune the model — no code changes required.
-# ──────────────────────────────────────────────────────────────────────
+# Edit this file to retune the model ΓÇö no code changes required.
+# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-# ── Enrichment-based factors (per-IOC) ─────────────────────────────
+# ΓöÇΓöÇ Enrichment-based factors (per-IOC) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 virustotal:
   max_points: 30
   # Points scale linearly: (malicious_engines / total_engines) * max_points
@@ -27,20 +27,20 @@ domain_age:
   recently_registered_days: 30   # 70 % of max_points
   young_domain_days: 90          # 40 % of max_points
 
-# ── Email header / authentication factors ──────────────────────────
+# ΓöÇΓöÇ Email header / authentication factors ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 auth_failure:
   max_points: 15
   spf_fail:   6
   dkim_fail:  5
   dmarc_fail: 8
-  # Points are additive — a triple failure earns
+  # Points are additive ΓÇö a triple failure earns
   # min(spf_fail + dkim_fail + dmarc_fail, max_points).
 
 reply_to_mismatch:
   max_points: 10
-  # Full max_points when From domain ≠ Reply-To domain.
+  # Full max_points when From domain Γëá Reply-To domain.
 
-# ── Content / attachment factors ───────────────────────────────────
+# ΓöÇΓöÇ Content / attachment factors ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 dangerous_attachment:
   max_points: 15
   # Full max_points for any attachment whose extension is in the
@@ -72,14 +72,14 @@ dangerous_attachment:
     - .dotm
   macro_points: 12
 
-# ── Lookalike / typosquat detection ────────────────────────────────
+# ΓöÇΓöÇ Lookalike / typosquat detection ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 lookalike:
   max_points: 15
-  levenshtein_threshold: 2       # edit distance ≤ threshold → suspect
+  levenshtein_threshold: 2       # edit distance Γëñ threshold ΓåÆ suspect
   homoglyph_points: 15           # homoglyph substitution detected
   levenshtein_points: 12         # close Levenshtein distance detected
 
-# ── Frequency-based factor ─────────────────────────────────────────
+# ΓöÇΓöÇ Frequency-based factor ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 ioc_frequency:
   max_points: 10
   # Points = min(frequency / high_freq_threshold * max_points, max_points)

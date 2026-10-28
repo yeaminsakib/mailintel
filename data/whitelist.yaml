@@ -1,4 +1,4 @@
-# MailIntel – Context-Aware IOC Whitelist
+﻿# MailIntel ΓÇô Context-Aware IOC Whitelist
 #
 # Domains are only excluded when they appear in the matching context.
 # Being in 'infrastructure' does NOT whitelist a domain in body URLs.
@@ -7,7 +7,7 @@
 # Edit this file to tune false-positive filtering for your environment.
 
 infrastructure:
-  # Mail relay / header infrastructure — safe to ignore in Received chains
+  # Mail relay / header infrastructure ΓÇö safe to ignore in Received chains
   domains:
     - google.com
     - googleapis.com
@@ -36,7 +36,7 @@ infrastructure:
     - mail.google.com
 
 body_url:
-  # Only truly benign domains — NEVER add cloud/CDN providers here
+  # Only truly benign domains ΓÇö NEVER add cloud/CDN providers here
   # (amazonaws.com, sendgrid.net, etc. are abused for phishing)
   domains:
     - w3.org
@@ -48,7 +48,7 @@ body_url:
     - cdn.jsdelivr.net
 
 sender:
-  # Free email providers — legitimate senders, not IOCs per se
+  # Free email providers ΓÇö legitimate senders, not IOCs per se
   domains:
     - gmail.com
     - outlook.com

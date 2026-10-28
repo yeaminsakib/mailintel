@@ -50,6 +50,16 @@ def _severity(score: float) -> str:
     return "LOW"
 
 
+def _risk_color(score: float) -> str:
+    if score >= 75.0:
+        return "#f43f5e"
+    if score >= 50.0:
+        return "#f97316"
+    if score >= 25.0:
+        return "#eab308"
+    return "#10b981"
+
+
 def _clean_domain(val: str) -> str:
     if not val:
         return ""
@@ -163,9 +173,9 @@ class ThreatGraphBuilder:
             if not short_label.strip():
                 short_label = filename
 
+            # Email tooltip
             c_ids = email_to_camp_ids.get(eid, [])
-            camp_badge = f"<br><b>Campaign:</b> {', '.join(c_ids)}" if c_ids else ""
-
+            camp_badge = f"<br><b>Campaign:</b> <span style='color:#38bdf8;'>{', '.join(c_ids)}</span>" if c_ids else ""
             self._add_entity_node(
                 node_id=node_id,
                 node_type="email",
@@ -184,9 +194,12 @@ class ThreatGraphBuilder:
                 },
                 campaign_ids=c_ids,
                 tooltip=(
-                    f"<b>[EMAIL]</b> {filename}<br>"
+                    f"<div class='tt-badge' style='background:rgba(0,240,255,0.15); color:#00f0ff; border:1px solid #00f0ff;'>EMAIL ARTIFACT</div><br>"
+                    f"<b>File:</b> {filename}<br>"
                     f"<b>Subject:</b> {subject}<br>"
-                    f"<b>Risk:</b> {score:.1f} ({_severity(score)}){camp_badge}"
+                    f"<b>Sender:</b> {from_addr or 'N/A'}<br>"
+                    f"<b>Risk:</b> <span style='color:{_risk_color(score)}; font-weight:700;'>{score:.1f} ({_severity(score)})</span>"
+                    f"{camp_badge}"
                 ),
             )
 
@@ -202,7 +215,11 @@ class ThreatGraphBuilder:
                     risk_score=min(100.0, score * 0.9),
                     metadata={"email": from_addr, "domain": sender_domain},
                     campaign_ids=c_ids,
-                    tooltip=f"<b>[SENDER]</b> {from_addr}<br><b>Domain:</b> {sender_domain}",
+                    tooltip=(
+                        f"<div class='tt-badge' style='background:rgba(245,158,11,0.15); color:#f59e0b; border:1px solid #f59e0b;'>SENDER IDENTITY</div><br>"
+                        f"<b>Address:</b> {from_addr}<br>"
+                        f"<b>Domain:</b> {sender_domain or 'N/A'}"
+                    ),
                 )
                 self.graph.add_edge(
                     node_id,
@@ -222,7 +239,10 @@ class ThreatGraphBuilder:
                         risk_score=min(100.0, score * 0.8),
                         metadata={"domain": sender_domain},
                         campaign_ids=c_ids,
-                        tooltip=f"<b>[DOMAIN]</b> {sender_domain}",
+                        tooltip=(
+                            f"<div class='tt-badge' style='background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid #a78bfa;'>INFRASTRUCTURE DOMAIN</div><br>"
+                            f"<b>Domain:</b> {sender_domain}"
+                        ),
                     )
                     self.graph.add_edge(
                         sender_id,
@@ -242,7 +262,11 @@ class ThreatGraphBuilder:
                     risk_score=min(100.0, score * 0.85),
                     metadata={"ip": first_hop, "role": "First External Hop"},
                     campaign_ids=c_ids,
-                    tooltip=f"<b>[IP]</b> {first_hop}<br><b>Role:</b> First External Hop",
+                    tooltip=(
+                        f"<div class='tt-badge' style='background:rgba(59,130,246,0.15); color:#3b82f6; border:1px solid #3b82f6;'>IP INFRASTRUCTURE</div><br>"
+                        f"<b>IP:</b> {first_hop}<br>"
+                        f"<b>Hop Role:</b> First External Relay"
+                    ),
                 )
                 self.graph.add_edge(
                     node_id,
@@ -285,6 +309,7 @@ class ThreatGraphBuilder:
                 else:
                     continue
 
+                col = ENTITY_COLORS.get(i_type, "#00f0ff")
                 self._add_entity_node(
                     node_id=i_node_id,
                     node_type=i_type,
@@ -299,8 +324,9 @@ class ThreatGraphBuilder:
                     },
                     campaign_ids=c_ids,
                     tooltip=(
-                        f"<b>[{i_type.upper()}]</b> {val}<br>"
-                        f"<b>Risk:</b> {i_score:.1f} ({_severity(i_score)})<br>"
+                        f"<div class='tt-badge' style='background:rgba(255,255,255,0.08); color:{col}; border:1px solid {col};'>{i_type.upper()} ARTIFACT</div><br>"
+                        f"<b>Value:</b> {val}<br>"
+                        f"<b>Risk:</b> <span style='color:{_risk_color(i_score)}; font-weight:700;'>{i_score:.1f} ({_severity(i_score)})</span><br>"
                         f"<b>Corpus Frequency:</b> {freq}"
                     ),
                 )
@@ -325,7 +351,10 @@ class ThreatGraphBuilder:
                             risk_score=min(100.0, i_score * 0.8),
                             metadata={"domain": dom},
                             campaign_ids=c_ids,
-                            tooltip=f"<b>[DOMAIN]</b> {dom}",
+                            tooltip=(
+                                f"<div class='tt-badge' style='background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid #a78bfa;'>INFRASTRUCTURE DOMAIN</div><br>"
+                                f"<b>Domain:</b> {dom}"
+                            ),
                         )
                         self.graph.add_edge(
                             i_node_id,
@@ -522,40 +551,144 @@ class ThreatGraphBuilder:
         network.on("deselectNode", function(params) {
             window.location.href = "mailintel://deselect";
         });
+        window.addEventListener("resize", function() {
+            if (network) {
+                network.redraw();
+                network.fit();
+            }
+        });
+        setTimeout(function() {
+            if (network) {
+                network.fit();
+            }
+        }, 250);
         return network;
         """
+        # Transform node string titles to HTML DOM Elements so vis-network renders rich formatted HTML
+        dom_tooltip_hook = """
+        try {
+            var rawNodes = nodes.get();
+            for (var i = 0; i < rawNodes.length; i++) {
+                var nd = rawNodes[i];
+                if (nd.title && typeof nd.title === "string") {
+                    var el = document.createElement("div");
+                    el.className = "mailintel-tooltip-inner";
+                    el.innerHTML = nd.title;
+                    nd.title = el;
+                }
+            }
+            nodes.update(rawNodes);
+        } catch(e) {
+            console.error("Error setting DOM tooltips", e);
+        }
+        network = new vis.Network(container, data, options);
+        """
+        html = html.replace("network = new vis.Network(container, data, options);", dom_tooltip_hook)
         html = html.replace("return network;", qt_hook)
+        html = html.replace("border: 1px solid lightgray;", "border: none;")
+        html = html.replace('<div class="card" style="width: 100%">', '<div class="card" style="width: 100%; height: 100%;">')
 
         # Inject dark UI styling for background and vis-network tooltips
         custom_style = """
         <style>
             html, body {
-                margin: 0;
-                padding: 0;
-                width: 100%;
-                height: 100%;
+                margin: 0 !important;
+                padding: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                min-height: 100% !important;
                 background-color: #15181e !important;
                 overflow: hidden !important;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             }
+            center, h1 {
+                display: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .card {
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                min-height: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                border-radius: 0 !important;
+                background-color: #15181e !important;
+                box-shadow: none !important;
+            }
+            .card-body {
+                padding: 0 !important;
+                margin: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+            }
             #mynetwork {
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                bottom: 0 !important;
                 width: 100% !important;
                 height: 100% !important;
                 background-color: #15181e !important;
                 border: none !important;
+                outline: none !important;
+                box-shadow: none !important;
+                float: none !important;
+            }
+            .vis-network {
+                width: 100% !important;
+                height: 100% !important;
+                outline: none !important;
+                border: none !important;
+            }
+            canvas {
+                outline: none !important;
+                border: none !important;
+            }
+            *:focus {
+                outline: none !important;
             }
             div.vis-tooltip {
-                background-color: #1e222b !important;
+                position: absolute !important;
+                background-color: #1a1e27 !important;
                 color: #f1f5f9 !important;
-                border: 1px solid #334155 !important;
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+                border: 1px solid #38bdf8 !important;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75) !important;
                 border-radius: 8px !important;
-                padding: 10px 14px !important;
-                font-family: inherit !important;
+                padding: 12px 16px !important;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
                 font-size: 12px !important;
-                line-height: 1.5 !important;
-                max-width: 320px !important;
-                word-wrap: break-word !important;
+                line-height: 1.6 !important;
+                max-width: 380px !important;
+                white-space: normal !important;
+                word-break: break-word !important;
+                pointer-events: none !important;
+                z-index: 10000 !important;
+            }
+            .mailintel-tooltip-inner {
+                font-size: 12px;
+                line-height: 1.6;
+                color: #cbd5e1;
+            }
+            .mailintel-tooltip-inner b {
+                color: #94a3b8;
+                font-weight: 600;
+            }
+            .mailintel-tooltip-inner .tt-badge {
+                display: inline-block;
+                padding: 2px 7px;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: 800;
+                margin-bottom: 6px;
+                letter-spacing: 0.5px;
             }
         </style>
         """

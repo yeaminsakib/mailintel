@@ -1,5 +1,5 @@
-# ──────────────────────────────────────────────────────────────────────
-# MailIntel — MITRE ATT&CK Technique Mapping
+﻿# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# MailIntel ΓÇö MITRE ATT&CK Technique Mapping
 #
 # Maps observable behaviours detected during email analysis to ATT&CK
 # technique IDs and human-readable names.
@@ -10,9 +10,9 @@
 #
 # Reference: MITRE ATT&CK Enterprise v14
 # https://attack.mitre.org/techniques/enterprise/
-# ──────────────────────────────────────────────────────────────────────
+# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-# ── Initial Access ─────────────────────────────────────────────────
+# ΓöÇΓöÇ Initial Access ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 phishing_attachment:
   technique_id: "T1566.001"
@@ -38,7 +38,7 @@ phishing_service:
     Phishing delivered via a third-party service (e.g. cloud storage
     sharing link, collaboration tool notification).
 
-# ── Execution ──────────────────────────────────────────────────────
+# ΓöÇΓöÇ Execution ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 user_execution_attachment:
   technique_id: "T1204.002"
@@ -80,7 +80,7 @@ powershell_execution:
     Attachment is a PowerShell script (.ps1) capable of arbitrary
     code execution.
 
-# ── Defence Evasion ────────────────────────────────────────────────
+# ΓöÇΓöÇ Defence Evasion ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 masquerading:
   technique_id: "T1036"
@@ -114,7 +114,7 @@ html_smuggling:
     HTML attachment or body contains encoded/obfuscated payloads
     that are assembled client-side.
 
-# ── Collection ─────────────────────────────────────────────────────
+# ΓöÇΓöÇ Collection ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 credential_harvesting:
   technique_id: "T1056.004"
@@ -124,7 +124,7 @@ credential_harvesting:
     Email links to a credential harvesting page impersonating a
     legitimate login portal.
 
-# ── Command and Control ───────────────────────────────────────────
+# ΓöÇΓöÇ Command and Control ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 c2_domain:
   technique_id: "T1071.001"
@@ -142,7 +142,7 @@ newly_registered_domain:
     Domain was registered very recently, which is a strong indicator
     of purpose-built phishing or C2 infrastructure.
 
-# ── Impact ─────────────────────────────────────────────────────────
+# ΓöÇΓöÇ Impact ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 malware_delivery:
   technique_id: "T1105"
@@ -152,14 +152,14 @@ malware_delivery:
     Email or associated IOCs indicate malware delivery (attachment
     hash matched in MalwareBazaar, or URL flagged by URLhaus).
 
-# ── Authentication Abuse ──────────────────────────────────────────
+# ΓöÇΓöÇ Authentication Abuse ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 spf_failure:
   technique_id: "T1586.002"
   name: "Compromise Accounts: Email Accounts"
   tactic: "Resource Development"
   description: >
-    SPF check failed — sender IP is not authorised by the purported
+    SPF check failed ΓÇö sender IP is not authorised by the purported
     sending domain, indicating possible email spoofing.
 
 dkim_failure:
@@ -167,7 +167,7 @@ dkim_failure:
   name: "Compromise Accounts: Email Accounts"
   tactic: "Resource Development"
   description: >
-    DKIM check failed — email signature is invalid or missing,
+    DKIM check failed ΓÇö email signature is invalid or missing,
     indicating tampering or spoofing.
 
 dmarc_failure:
@@ -175,5 +175,5 @@ dmarc_failure:
   name: "Compromise Accounts: Email Accounts"
   tactic: "Resource Development"
   description: >
-    DMARC check failed — alignment between SPF/DKIM domains and
+    DMARC check failed ΓÇö alignment between SPF/DKIM domains and
     the From header domain has broken.
