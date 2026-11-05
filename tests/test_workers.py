@@ -4,11 +4,8 @@ Tests for app/workers.py (ScanWorker, ExportWorker, EnrichWorker) and app/theme.
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from app.theme import DARK_THEME_QSS
 from app.workers import EnrichWorker, ExportWorker, ScanWorker

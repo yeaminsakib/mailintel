@@ -261,17 +261,38 @@ class Database:
         search: str = "",
         limit: int = 500,
         offset: int = 0,
+        exclude_types: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return IOC rows matching type and search filters, ordered by frequency."""
+        """Return IOC rows matching type and search filters, ordered by frequency.
+
+        Parameters
+        ----------
+        ioc_type : str
+            If non-empty, restrict results to this IOC type (e.g. ``'ipv4'``).
+        search : str
+            Substring filter applied to the ``value`` column.
+        limit : int
+            Maximum number of rows to return.
+        offset : int
+            Row offset for pagination.
+        exclude_types : list[str] | None
+            IOC types to exclude from the results (e.g. ``['url']``).
+            Only applied when ``ioc_type`` is empty (i.e. "All Types" mode).
+        """
         query = "SELECT * FROM iocs WHERE 1=1"
         params: list[Any] = []
         if ioc_type and ioc_type.lower() != "all":
             query += " AND type = ?"
             params.append(ioc_type.lower())
+        elif exclude_types:
+            # Exclude specified types when showing all types
+            placeholders = ",".join("?" * len(exclude_types))
+            query += f" AND type NOT IN ({placeholders})"
+            params.extend([t.lower() for t in exclude_types])
         if search:
             query += " AND value LIKE ?"
             params.append(f"%{search}%")
-        query += " ORDER BY frequency DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY frequency DESC, id ASC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         cur = self._conn.execute(query, tuple(params))
         return [dict(r) for r in cur.fetchall()]

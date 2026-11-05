@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.graph_view import GraphPage
 from app.workers import EnrichWorker
 from core.correlation import (
     ENTITY_COLORS,
@@ -665,7 +666,14 @@ class DashboardWindow(QMainWindow):
             type_filter = "" if raw_type == "All Types" else raw_type.lower().replace(" ", "_")
             search_query = self.search_bar.text().strip()
 
-            iocs = db.get_filtered_iocs(ioc_type=type_filter, search=search_query, limit=300)
+            # When showing all types, exclude URLs — only show IPs and Domains
+            exclude = ["url"] if not type_filter else None
+            iocs = db.get_filtered_iocs(
+                ioc_type=type_filter,
+                search=search_query,
+                limit=300,
+                exclude_types=exclude,
+            )
             self.populate_ioc_table(iocs, db)
 
             # High risk count estimation (from loaded items or sample)
@@ -1996,6 +2004,14 @@ class DashboardWindow(QMainWindow):
         html = self.graph_builder.generate_html()
         self._ensure_graph_web_view()
         if self.graph_web_view is not None and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            # The graph HTML holds attacker-controlled text, so render it in a
+            # locked-down page (no navigation, no remote/file access).  Created
+            # here rather than with the view so no web page exists until needed.
+            if not isinstance(self.graph_web_view.page(), GraphPage):
+                page = GraphPage(self.graph_web_view)
+                page.nodeSelected.connect(self.on_graph_node_clicked)
+                page.nodeDeselected.connect(self.on_graph_node_deselected)
+                self.graph_web_view.setPage(page)
             self.graph_web_view.setHtml(html)
 
         self.on_graph_node_deselected()
@@ -2251,7 +2267,7 @@ class DashboardWindow(QMainWindow):
             ("virustotal", "VirusTotal v3", "Requires API Key"),
             ("abuseipdb",  "AbuseIPDB",    "Requires API Key"),
             ("otx",        "AlienVault OTX", "Requires API Key"),
-            ("abusech",    "URLhaus / ThreatFox", "Public API (No Key)"),
+            ("abusech",    "URLhaus / ThreatFox", "Requires Auth-Key"),
             ("rdap",       "RDAP / WHOIS", "Public Protocol (No Key)"),
         ]
 
@@ -2343,7 +2359,7 @@ class DashboardWindow(QMainWindow):
                 mal_cnt = p_stats.get("malicious", 0)
 
                 key = get_api_key(slug)
-                if slug in ("abusech", "rdap"):
+                if slug == "rdap":
                     status_lbl.setText("● Active (Public Feed)")
                     status_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #10b981;")
                 elif key:
@@ -2422,7 +2438,8 @@ class DashboardWindow(QMainWindow):
                 p = OTXProvider(key)
                 ok, msg = p.test_connectivity()
             elif provider_slug == "abusech":
-                p = AbuseCHProvider()
+                key = get_api_key("abusech")
+                p = AbuseCHProvider(key)
                 ok, msg = p.test_connectivity()
             elif provider_slug == "rdap":
                 p = RDAPProvider()
@@ -2481,6 +2498,7 @@ class DashboardWindow(QMainWindow):
             ("virustotal", "VirusTotal v3 API Key"),
             ("abuseipdb", "AbuseIPDB API Key"),
             ("otx", "AlienVault OTX API Key"),
+            ("abusech", "abuse.ch Auth-Key (URLhaus / ThreatFox / MalwareBazaar)"),
         ]:
             row = QVBoxLayout()
             row.setSpacing(4)

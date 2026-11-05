@@ -330,6 +330,20 @@ class TestIngest:
         ingest_parsed_email(parsed, db)
         assert db.get_email_count() == 1
 
+    def test_rescan_does_not_inflate_ioc_frequency(self, db: Database) -> None:
+        """Frequency counts distinct emails, so rescans must leave it unchanged."""
+        parsed = _make_parsed_email(sha256="78" * 32, ips=["8.8.8.8"])
+        for _ in range(3):
+            ingest_parsed_email(parsed, db)
+        iocs = db.get_all_iocs()
+        assert iocs
+        assert all(i["frequency"] == 1 for i in iocs)
+
+        other = _make_parsed_email(sha256="79" * 32, ips=["8.8.8.8"])
+        ingest_parsed_email(other, db)
+        freqs = {i["value"]: i["frequency"] for i in db.get_all_iocs()}
+        assert freqs["8.8.8.8"] == 2
+
 
 # ---------------------------------------------------------------------------
 # Batch commit tests

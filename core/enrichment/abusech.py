@@ -2,7 +2,8 @@
 core/enrichment/abusech.py
 abuse.ch enrichment provider (URLhaus, ThreatFox, MalwareBazaar).
 
-abuse.ch is free and requires an API key only for some endpoints.
+abuse.ch is free, but every API call needs an Auth-Key header (a free key
+from https://auth.abuse.ch/).  Requests without one are rejected.
 This provider queries three sub-services:
 
 - **URLhaus**: malicious URL lookups
@@ -39,9 +40,14 @@ class AbuseCHProvider(BaseProvider):
     _THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1"
     _BAZAAR_URL = "https://mb-api.abuse.ch/api/v1"
 
+    def __init__(self, api_key: str | None = None, **kwargs) -> None:
+        super().__init__(api_key=api_key, **kwargs)
+        if api_key:
+            self._session.headers["Auth-Key"] = api_key
+
     def _requires_api_key(self) -> bool:
-        """abuse.ch does not require an API key for basic lookups."""
-        return False
+        """All abuse.ch APIs require an Auth-Key header."""
+        return True
 
     def _query(self, ioc_type: str, ioc_value: str) -> requests.Response:
         """Route to the appropriate abuse.ch sub-service."""
@@ -228,6 +234,8 @@ class AbuseCHProvider(BaseProvider):
 
     def _test_connectivity(self) -> tuple[bool, str]:
         """Test by querying ThreatFox for a known-benign search."""
+        if not self._api_key:
+            return False, "No API key configured for abusech (get one at auth.abuse.ch)"
         try:
             resp = self._session.post(
                 f"{self._THREATFOX_URL}/",

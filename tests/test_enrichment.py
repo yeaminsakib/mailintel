@@ -297,7 +297,7 @@ class TestAbuseCHProvider:
             },
             status=200,
         )
-        provider = AbuseCHProvider()
+        provider = AbuseCHProvider(api_key="test-key")
         result = provider.enrich("url", "http://evil.com/payload.exe")
         assert result.success
         assert result.verdict == "malicious"
@@ -312,7 +312,7 @@ class TestAbuseCHProvider:
             json={"query_status": "no_results"},
             status=200,
         )
-        provider = AbuseCHProvider()
+        provider = AbuseCHProvider(api_key="test-key")
         result = provider.enrich("url", "http://clean.example.com")
         assert result.success
         assert result.verdict == "clean"
@@ -334,7 +334,7 @@ class TestAbuseCHProvider:
             },
             status=200,
         )
-        provider = AbuseCHProvider()
+        provider = AbuseCHProvider(api_key="test-key")
         result = provider.enrich("hash_sha256", sha)
         assert result.success
         assert result.verdict == "malicious"
@@ -356,12 +356,28 @@ class TestAbuseCHProvider:
             },
             status=200,
         )
-        provider = AbuseCHProvider()
+        provider = AbuseCHProvider(api_key="test-key")
         result = provider.enrich("ipv4", "5.6.7.8")
         assert result.success
         assert result.verdict == "malicious"
         assert "Cobalt Strike" in result.tags
         assert result.score == 90.0
+
+    @responses.activate
+    def test_sends_auth_key_header(self) -> None:
+        responses.add(
+            responses.POST,
+            "https://urlhaus-api.abuse.ch/v1/url/",
+            json={"query_status": "no_results"},
+            status=200,
+        )
+        AbuseCHProvider(api_key="secret-123").enrich("url", "http://x.example/")
+        assert responses.calls[0].request.headers["Auth-Key"] == "secret-123"
+
+    def test_without_key_returns_error_and_makes_no_request(self) -> None:
+        result = AbuseCHProvider().enrich("url", "http://x.example/")
+        assert not result.success
+        assert "No API key" in (result.error or "")
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +719,7 @@ class TestKeyManagement:
     @patch("core.enrichment.keys.keyring")
     def test_keyring_error_handling(self, mock_keyring) -> None:
         from keyring.errors import KeyringError
+
         from core.enrichment.keys import delete_api_key
 
         mock_keyring.get_password.side_effect = KeyringError("read failed")
@@ -751,7 +768,7 @@ class TestRDAPExtended:
         from unittest.mock import MagicMock
         provider = RDAPProvider()
         now = datetime.now(timezone.utc)
-        
+
         # Test 20 days old (< 30) with vcard registrar
         reg_20d = (now - timedelta(days=20)).isoformat()
         exp_100d = (now + timedelta(days=100)).isoformat()

@@ -17,7 +17,10 @@ os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --no-sandbox"
 from PyQt6.QtWidgets import QApplication
 
 from app.dashboard import DashboardWindow, RiskBadge, severity_from_score
+from core.parser.eml_parser import parse_eml_file
 from core.storage.database import Database
+
+_FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(scope="session")
@@ -34,6 +37,9 @@ def test_db_path(tmp_path: Path) -> Path:
     """Create a temporary SQLite database with seed emails and IOCs."""
     db_file = tmp_path / "test_mailintel.db"
     db = Database(db_file)
+
+    # One stored email, so the dashboard treats the DB as "scanned"
+    db.upsert_email(parse_eml_file(_FIXTURES / "01_phishing_link.eml"))
 
     # Insert sample IOCs
     i1 = db.upsert_ioc("ipv4", "198.51.100.22")
@@ -64,14 +70,29 @@ def test_severity_from_score():
     assert severity_from_score(0.0) == "LOW"
 
 
-def test_dashboard_initialization(qapp, test_db_path):
+def _loaded_window(db_path: Path) -> DashboardWindow:
+    """Open the dashboard and load data, as happens after a scan finishes."""
+    window = DashboardWindow(db_path=db_path)
+    window.load_dash_data()
+    return window
+
+
+def test_dashboard_starts_empty_even_with_data(qapp, test_db_path):
     window = DashboardWindow(db_path=test_db_path)
-    assert window.ioc_table.rowCount() == 3
+    assert window.ioc_table.rowCount() == 0
+    assert window.kpi_cards["unique_iocs"].text() == "0"
+
+
+def test_dashboard_initialization(qapp, test_db_path):
+    window = _loaded_window(test_db_path)
+    # "All Types" hides URLs; the KPI still counts every IOC
+    assert window.ioc_table.rowCount() == 2
     assert window.kpi_cards["unique_iocs"].text() == "3"
+    assert window.kpi_cards["total_emails"].text() == "1"
 
 
 def test_dashboard_type_filter(qapp, test_db_path):
-    window = DashboardWindow(db_path=test_db_path)
+    window = _loaded_window(test_db_path)
 
     # Filter to IPv4
     idx = window.type_filter.findText("IPv4")
@@ -79,13 +100,17 @@ def test_dashboard_type_filter(qapp, test_db_path):
     assert window.ioc_table.rowCount() == 1
     assert window.ioc_table.item(0, 0).text() == "198.51.100.22"
 
-    # Reset filter
+    # URLs are still reachable through their own filter
+    window.type_filter.setCurrentIndex(window.type_filter.findText("URL"))
+    assert window.ioc_table.rowCount() == 1
+
+    # Reset filter ("All Types" excludes URLs)
     window.type_filter.setCurrentIndex(0)
-    assert window.ioc_table.rowCount() == 3
+    assert window.ioc_table.rowCount() == 2
 
 
 def test_ioc_details_drawer_breakdown(qapp, test_db_path):
-    window = DashboardWindow(db_path=test_db_path)
+    window = _loaded_window(test_db_path)
     # Select first row (198.51.100.22 with VT enrichment)
     window.ioc_table.selectRow(0)
 

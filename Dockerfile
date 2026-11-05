@@ -39,6 +39,7 @@ COPY core/ ./core/
 COPY data/ ./data/
 COPY cli/ ./cli/
 COPY app/ ./app/
+COPY main.py ./
 
 # Install mailintel package in editable mode
 RUN pip install --no-cache-dir -e .

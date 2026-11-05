@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from html import escape as _esc
 from typing import Any
 from urllib.parse import urlparse
 
@@ -175,7 +176,7 @@ class ThreatGraphBuilder:
 
             # Email tooltip
             c_ids = email_to_camp_ids.get(eid, [])
-            camp_badge = f"<br><b>Campaign:</b> <span style='color:#38bdf8;'>{', '.join(c_ids)}</span>" if c_ids else ""
+            camp_badge = f"<br><b>Campaign:</b> <span style='color:#38bdf8;'>{_esc(', '.join(c_ids))}</span>" if c_ids else ""
             self._add_entity_node(
                 node_id=node_id,
                 node_type="email",
@@ -195,9 +196,9 @@ class ThreatGraphBuilder:
                 campaign_ids=c_ids,
                 tooltip=(
                     f"<div class='tt-badge' style='background:rgba(0,240,255,0.15); color:#00f0ff; border:1px solid #00f0ff;'>EMAIL ARTIFACT</div><br>"
-                    f"<b>File:</b> {filename}<br>"
-                    f"<b>Subject:</b> {subject}<br>"
-                    f"<b>Sender:</b> {from_addr or 'N/A'}<br>"
+                    f"<b>File:</b> {_esc(filename)}<br>"
+                    f"<b>Subject:</b> {_esc(subject)}<br>"
+                    f"<b>Sender:</b> {_esc(from_addr or 'N/A')}<br>"
                     f"<b>Risk:</b> <span style='color:{_risk_color(score)}; font-weight:700;'>{score:.1f} ({_severity(score)})</span>"
                     f"{camp_badge}"
                 ),
@@ -217,8 +218,8 @@ class ThreatGraphBuilder:
                     campaign_ids=c_ids,
                     tooltip=(
                         f"<div class='tt-badge' style='background:rgba(245,158,11,0.15); color:#f59e0b; border:1px solid #f59e0b;'>SENDER IDENTITY</div><br>"
-                        f"<b>Address:</b> {from_addr}<br>"
-                        f"<b>Domain:</b> {sender_domain or 'N/A'}"
+                        f"<b>Address:</b> {_esc(from_addr)}<br>"
+                        f"<b>Domain:</b> {_esc(sender_domain or 'N/A')}"
                     ),
                 )
                 self.graph.add_edge(
@@ -241,7 +242,7 @@ class ThreatGraphBuilder:
                         campaign_ids=c_ids,
                         tooltip=(
                             f"<div class='tt-badge' style='background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid #a78bfa;'>INFRASTRUCTURE DOMAIN</div><br>"
-                            f"<b>Domain:</b> {sender_domain}"
+                            f"<b>Domain:</b> {_esc(sender_domain)}"
                         ),
                     )
                     self.graph.add_edge(
@@ -264,7 +265,7 @@ class ThreatGraphBuilder:
                     campaign_ids=c_ids,
                     tooltip=(
                         f"<div class='tt-badge' style='background:rgba(59,130,246,0.15); color:#3b82f6; border:1px solid #3b82f6;'>IP INFRASTRUCTURE</div><br>"
-                        f"<b>IP:</b> {first_hop}<br>"
+                        f"<b>IP:</b> {_esc(first_hop)}<br>"
                         f"<b>Hop Role:</b> First External Relay"
                     ),
                 )
@@ -324,8 +325,8 @@ class ThreatGraphBuilder:
                     },
                     campaign_ids=c_ids,
                     tooltip=(
-                        f"<div class='tt-badge' style='background:rgba(255,255,255,0.08); color:{col}; border:1px solid {col};'>{i_type.upper()} ARTIFACT</div><br>"
-                        f"<b>Value:</b> {val}<br>"
+                        f"<div class='tt-badge' style='background:rgba(255,255,255,0.08); color:{col}; border:1px solid {col};'>{_esc(i_type.upper())} ARTIFACT</div><br>"
+                        f"<b>Value:</b> {_esc(val)}<br>"
                         f"<b>Risk:</b> <span style='color:{_risk_color(i_score)}; font-weight:700;'>{i_score:.1f} ({_severity(i_score)})</span><br>"
                         f"<b>Corpus Frequency:</b> {freq}"
                     ),
@@ -353,7 +354,7 @@ class ThreatGraphBuilder:
                             campaign_ids=c_ids,
                             tooltip=(
                                 f"<div class='tt-badge' style='background:rgba(167,139,250,0.15); color:#a78bfa; border:1px solid #a78bfa;'>INFRASTRUCTURE DOMAIN</div><br>"
-                                f"<b>Domain:</b> {dom}"
+                                f"<b>Domain:</b> {_esc(dom)}"
                             ),
                         )
                         self.graph.add_edge(
@@ -540,16 +541,17 @@ class ThreatGraphBuilder:
         net = self.to_pyvis_network()
         html = net.generate_html()
 
-        # Custom JS hook for Qt WebEngine navigation handling
-        # Intercepts selectNode and deselectNode events to update the details drawer
+        # Custom JS hook for Qt WebEngine: node selection is reported through
+        # console messages (picked up by app.graph_view.GraphPage), because the
+        # page is not allowed to navigate anywhere.
         qt_hook = """
         network.on("selectNode", function(params) {
             if (params.nodes && params.nodes.length > 0) {
-                window.location.href = "mailintel://node/" + encodeURIComponent(params.nodes[0]);
+                console.log("mailintel://node/" + encodeURIComponent(params.nodes[0]));
             }
         });
         network.on("deselectNode", function(params) {
-            window.location.href = "mailintel://deselect";
+            console.log("mailintel://deselect");
         });
         window.addEventListener("resize", function() {
             if (network) {

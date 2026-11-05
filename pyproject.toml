@@ -33,11 +33,13 @@ mailintel = "cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "core*"]
+include = ["app*", "core*", "cli*"]
 exclude = ["tests*", "evaluation*", "data*", "case_log*", "test_emails*", "scratch*", "Project*"]
 
 [tool.setuptools]
-py-modules = ["cli", "main"]
+# cli.py stays a run-from-source shim (python cli.py ...); the installed
+# entry point uses the cli/ package, so only main.py ships as a module.
+py-modules = ["main"]
 
 [project.optional-dependencies]
 dev = [

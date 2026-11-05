@@ -30,7 +30,8 @@ def ingest_parsed_email(
 
     Steps
     -----
-    1. Upsert the email row (deduped by file_sha256).
+    1. Upsert the email row (deduped by file_sha256).  If it was already
+       stored, stop here so IOC frequencies are not inflated.
     2. Extract IPs from Received headers (infrastructure context).
     3. Extract URLs from body (body_url context).
     4. Extract email addresses from From/Reply-To/Return-Path.
@@ -52,38 +53,50 @@ def ingest_parsed_email(
     if whitelist is None:
         whitelist = _WHITELIST
 
+    # Re-ingesting a stored email (same file SHA-256) only refreshes its
+    # last_seen.  IOC frequency means "number of distinct emails", so it
+    # must not grow on rescans.
+    already_stored = db.email_exists(parsed.file_sha256)
     email_id = db.upsert_email(parsed)
+    if already_stored:
+        return email_id
+
+    # Each (type, value) is upserted once per email, even if it appears in
+    # several places (e.g. header and body); every context is still linked.
+    ioc_ids: dict[tuple[str, str], int] = {}
+
+    def add(ioc_type: str, value: str, context: str) -> None:
+        key = (ioc_type, value)
+        ioc_id = ioc_ids.get(key)
+        if ioc_id is None:
+            ioc_id = db.upsert_ioc(ioc_type, value)
+            ioc_ids[key] = ioc_id
+        db.link_email_ioc(email_id, ioc_id, context=context)
 
     # ------------------------------------------------------------------
     # 1. IPs from Received chain (infrastructure context)
     # ------------------------------------------------------------------
     for hop in parsed.received_chain:
         if hop.from_ip and hop.is_external:
-            ioc_type = "ipv6" if ":" in hop.from_ip else "ipv4"
-            ioc_id = db.upsert_ioc(ioc_type, hop.from_ip)
-            db.link_email_ioc(email_id, ioc_id, context="header_ip")
+            add("ipv6" if ":" in hop.from_ip else "ipv4", hop.from_ip, "header_ip")
 
     # ------------------------------------------------------------------
     # 2. IPs from body plain text (body context)
     # ------------------------------------------------------------------
     for ip in extract_ipv4(parsed.body_plain):
-        ioc_id = db.upsert_ioc("ipv4", ip)
-        db.link_email_ioc(email_id, ioc_id, context="body_ipv4")
+        add("ipv4", ip, "body_ipv4")
 
     for ip in extract_ipv6(parsed.body_plain):
-        ioc_id = db.upsert_ioc("ipv6", ip)
-        db.link_email_ioc(email_id, ioc_id, context="body_ipv6")
+        add("ipv6", ip, "body_ipv6")
 
     # ------------------------------------------------------------------
     # 3. URLs (body_url context — strict whitelist)
     # ------------------------------------------------------------------
     for url in parsed.urls:
-        # Extract domain for whitelist check
         domain = _domain_from_url(url)
         if domain and whitelist.is_whitelisted(domain, context="body_url"):
             continue
-        ioc_id = db.upsert_ioc("url", url)
-        db.link_email_ioc(email_id, ioc_id, context="body_url")
+        add("url", url, "body_url")
 
     # ------------------------------------------------------------------
     # 4. Email addresses from key headers
@@ -97,8 +110,7 @@ def ingest_parsed_email(
         domain = addr.split("@", 1)[-1]
         if whitelist.is_whitelisted(domain, context="sender"):
             continue
-        ioc_id = db.upsert_ioc("email", addr)
-        db.link_email_ioc(email_id, ioc_id, context="header_email")
+        add("email", addr, "header_email")
 
     # ------------------------------------------------------------------
     # 5. Attachment hashes
@@ -109,8 +121,7 @@ def ingest_parsed_email(
             ("hash_sha1",   att.hashes.sha1),
             ("hash_sha256", att.hashes.sha256),
         ]:
-            ioc_id = db.upsert_ioc(hash_type, hash_val)
-            db.link_email_ioc(email_id, ioc_id, context="attachment_hash")
+            add(hash_type, hash_val, "attachment_hash")
 
     return email_id
 

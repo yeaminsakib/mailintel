@@ -95,14 +95,9 @@ def main() -> None:
     # Apply global dark threat intelligence QSS theme
     app.setStyleSheet(DARK_THEME_QSS)
 
-    # Launch dashboard window
-    window = DashboardWindow()
-
-    # On startup, populate table and KPIs from existing DB data (if any)
-    db = Database(str(_DB_PATH))
-    window.populate_table_from_db(db)
-    window.update_kpi_from_db(db)
-    db.close()
+    # Launch dashboard window.  It starts in an empty state; data appears
+    # only after the analyst selects a folder and a scan finishes.
+    window = DashboardWindow(db_path=_DB_PATH)
 
     # Wire up the 'Select .eml Folder & Analyze' button
     window.analyze_button.clicked.connect(
