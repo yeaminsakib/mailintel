@@ -21,9 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.parser.models import ParsedEmail
+from core.ioc.flags import compute_flags
+from core.parser.models import AttachmentInfo, ParsedEmail
+from core.parser.text import body_text_for_storage
 
-from .schema import SCHEMA_SQL
+from .schema import EMAILS_V2_COLUMNS, SCHEMA_SQL, SCHEMA_VERSION
 
 # Default DB path — resolved relative to the project root so tests can
 # override it trivially by passing a tmp_path / :memory: connection.
@@ -71,9 +73,32 @@ class Database:
     # ------------------------------------------------------------------
 
     def _apply_schema(self) -> None:
-        """Run all CREATE TABLE … IF NOT EXISTS statements."""
+        """Create missing tables, then upgrade older databases in place."""
         self._conn.executescript(SCHEMA_SQL)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Bring a database created by an older version up to ``SCHEMA_VERSION``.
+
+        The version lives in ``PRAGMA user_version``.  Steps are idempotent
+        (columns are added only if missing), so an interrupted upgrade can
+        simply be run again.
+        """
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 2:
+            existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(emails)")}
+            for name, definition in EMAILS_V2_COLUMNS.items():
+                if name not in existing:  # names/definitions are module constants
+                    self._conn.execute(f"ALTER TABLE emails ADD COLUMN {name} {definition}")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_email ON attachments(email_id)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256)")
+        if version < SCHEMA_VERSION:
+            self._conn.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
+
+    def schema_version(self) -> int:
+        """Return the schema version recorded in the database."""
+        return int(self._conn.execute("PRAGMA user_version").fetchone()[0])
 
     def close(self) -> None:
         """Flush pending writes and close the underlying connection."""
@@ -130,17 +155,28 @@ class Database:
             else ""
         )
 
+        flags = compute_flags(parsed.headers, parsed.auth_results)
+        body_text = body_text_for_storage(parsed.body_plain, parsed.body_html)
+
         cur = self._conn.execute(
             """
             INSERT INTO emails
                 (file_sha256, filename, filepath, headers_json, auth_json,
                  received_json, first_hop_ip, url_count, attach_count,
-                 first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 first_seen, last_seen,
+                 subject, from_addr, body_text,
+                 reply_to_mismatch, return_path_mismatch, flags_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (file_sha256) DO UPDATE SET
                 last_seen    = excluded.last_seen,
                 url_count    = excluded.url_count,
-                attach_count = excluded.attach_count
+                attach_count = excluded.attach_count,
+                subject      = excluded.subject,
+                from_addr    = excluded.from_addr,
+                body_text    = excluded.body_text,
+                reply_to_mismatch    = excluded.reply_to_mismatch,
+                return_path_mismatch = excluded.return_path_mismatch,
+                flags_json   = excluded.flags_json
             RETURNING id
             """,
             (
@@ -155,11 +191,42 @@ class Database:
                 len(parsed.attachments),
                 now,
                 now,
+                parsed.headers.subject,
+                parsed.headers.from_addr,
+                body_text,
+                int(flags.reply_to_mismatch),
+                int(flags.return_path_mismatch),
+                json.dumps(flags.to_dict()),
             ),
         )
         row = cur.fetchone()
         self._auto_commit()
         return row[0]
+
+    def replace_attachments(
+        self, email_id: int, attachments: list[AttachmentInfo]
+    ) -> None:
+        """Store attachment metadata + hashes for an email (idempotent)."""
+        self._conn.execute("DELETE FROM attachments WHERE email_id = ?", (email_id,))
+        self._conn.executemany(
+            """
+            INSERT INTO attachments (email_id, filename, mime_type, size, md5, sha1, sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (email_id, a.filename, a.mime_type, a.size,
+                 a.hashes.md5, a.hashes.sha1, a.hashes.sha256)
+                for a in attachments
+            ],
+        )
+        self._auto_commit()
+
+    def get_attachments_for_email(self, email_id: int) -> list[dict[str, Any]]:
+        """Return attachment rows of one email, in stored order."""
+        cur = self._conn.execute(
+            "SELECT * FROM attachments WHERE email_id = ? ORDER BY id", (email_id,)
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     def email_exists(self, file_sha256: str) -> bool:
         """Return True if an email with this SHA-256 is already stored."""
@@ -185,7 +252,9 @@ class Database:
             """
             SELECT id, file_sha256, filename, filepath, headers_json,
                    auth_json, received_json, first_hop_ip, url_count,
-                   attach_count, first_seen, last_seen
+                   attach_count, first_seen, last_seen,
+                   subject, from_addr, reply_to_mismatch, return_path_mismatch,
+                   flags_json
             FROM emails
             ORDER BY id DESC
             LIMIT ?

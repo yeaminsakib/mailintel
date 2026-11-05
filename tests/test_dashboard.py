@@ -238,3 +238,19 @@ def test_graph_page_correlation_and_drawer(qapp, test_db_path):
     if window.graph_campaign_combo.count() > 1:
         window.graph_campaign_combo.setCurrentIndex(1)
         assert window.graph_builder.graph.number_of_nodes() > 0
+
+
+def test_case_view_lists_subject_and_sender(qapp, test_db_path):
+    """Linked mails must show their real subject/sender, not '(no subject)  []'."""
+    window = DashboardWindow(db_path=test_db_path)
+    db = window.get_db()
+    email = db.get_all_emails()[0]
+    cid = db.create_case(title="Subjects", description="", notes="", priority="low")
+    db.add_email_to_case(cid, email["id"])
+    window.load_cases_data()
+    window.cases_table.selectRow(0)
+    text = window.case_emails_list.toPlainText()
+    assert email["subject"] and email["subject"][:20] in text
+    assert "(no subject)" not in text
+    assert email["from_addr"] in text
+    db.close()

@@ -5,6 +5,7 @@ SQLite table definitions for MailIntel.
 Tables
 ------
 emails          – One row per unique .eml file (deduped by file_sha256).
+attachments     – Name / type / size / hashes of each attachment of an email.
 iocs            – One row per unique IOC (type, value) pair.
 email_iocs      – Many-to-many join between emails and iocs.
 enrichments     – Cached provider results keyed by (ioc_id, provider).
@@ -12,6 +13,23 @@ cases           – Analyst-managed investigation cases.
 case_emails     – Many-to-many join between cases and emails.
 """
 from __future__ import annotations
+
+#: Current schema version, stored in ``PRAGMA user_version``.
+#:   1 - original tables
+#:   2 - mail content columns on ``emails`` + ``attachments`` table
+SCHEMA_VERSION: int = 2
+
+#: Columns added to ``emails`` in version 2: name -> column definition.
+#: Used by :meth:`Database._migrate` to upgrade databases created by v1
+#: (``CREATE TABLE IF NOT EXISTS`` does not alter an existing table).
+EMAILS_V2_COLUMNS: dict[str, str] = {
+    "subject":              "TEXT    NOT NULL DEFAULT ''",
+    "from_addr":            "TEXT    NOT NULL DEFAULT ''",
+    "body_text":            "TEXT    NOT NULL DEFAULT ''",   # plain text only, capped
+    "reply_to_mismatch":    "INTEGER NOT NULL DEFAULT 0",
+    "return_path_mismatch": "INTEGER NOT NULL DEFAULT 0",
+    "flags_json":           "TEXT    NOT NULL DEFAULT '{}'",  # see core.ioc.flags.MailFlags
+}
 
 # All CREATE TABLE statements use IF NOT EXISTS — safe to call on every start.
 SCHEMA_SQL: str = """
@@ -33,7 +51,28 @@ CREATE TABLE IF NOT EXISTS emails (
     url_count     INTEGER NOT NULL DEFAULT 0,
     attach_count  INTEGER NOT NULL DEFAULT 0,
     first_seen    TEXT    NOT NULL,               -- ISO-8601
-    last_seen     TEXT    NOT NULL                -- updated on re-scan
+    last_seen     TEXT    NOT NULL,               -- updated on re-scan
+    -- schema v2 (kept in sync with EMAILS_V2_COLUMNS)
+    subject              TEXT    NOT NULL DEFAULT '',
+    from_addr            TEXT    NOT NULL DEFAULT '',
+    body_text            TEXT    NOT NULL DEFAULT '',
+    reply_to_mismatch    INTEGER NOT NULL DEFAULT 0,
+    return_path_mismatch INTEGER NOT NULL DEFAULT 0,
+    flags_json           TEXT    NOT NULL DEFAULT '{}'
+);
+
+-- -------------------------------------------------------------------------
+-- attachments: metadata + hashes only; the bytes are never stored
+-- -------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS attachments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email_id   INTEGER NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    filename   TEXT    NOT NULL,
+    mime_type  TEXT    NOT NULL DEFAULT '',
+    size       INTEGER NOT NULL DEFAULT 0,
+    md5        TEXT    NOT NULL DEFAULT '',
+    sha1       TEXT    NOT NULL DEFAULT '',
+    sha256     TEXT    NOT NULL DEFAULT ''
 );
 
 -- -------------------------------------------------------------------------

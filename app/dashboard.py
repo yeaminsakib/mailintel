@@ -1191,7 +1191,7 @@ class DashboardWindow(QMainWindow):
             self.case_email_count_label.setText(f"📧 {count} email(s) linked")
             linked_emails = db.get_emails_for_case(cid)
             lines = [
-                f"{e.get('subject', '(no subject)')[:55]}  [{e.get('sender_email', '')}]"
+                f"{e.get('subject', '(no subject)')[:55]}  [{e.get('from_addr', '')}]"
                 for e in linked_emails[:10]
             ]
             if count > 10:
@@ -1523,7 +1523,7 @@ class DashboardWindow(QMainWindow):
             linked_emails = db.get_emails_for_case(cid)
             if linked_emails:
                 lines = [
-                    f"{e.get('subject', '(no subject)')[:55]}  [{e.get('sender_email', '')}]"
+                    f"{e.get('subject', '(no subject)')[:55]}  [{e.get('from_addr', '')}]"
                     for e in linked_emails[:10]
                 ]
                 if count > 10:

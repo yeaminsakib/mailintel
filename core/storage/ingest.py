@@ -12,6 +12,7 @@ from core.ioc.extractors import (
     extract_ipv4,
     extract_ipv6,
 )
+from core.ioc.normalize import domain_from_url, email_domain, normalize_domain, normalize_url
 from core.ioc.whitelist import WhitelistPolicy
 from core.parser.models import ParsedEmail
 
@@ -30,13 +31,16 @@ def ingest_parsed_email(
 
     Steps
     -----
-    1. Upsert the email row (deduped by file_sha256).  If it was already
-       stored, stop here so IOC frequencies are not inflated.
+    1. Upsert the email row (deduped by file_sha256) together with its
+       content (subject, sender, body text, mismatch flags) and attachment
+       metadata.  If it was already stored, stop here so IOC frequencies
+       are not inflated.
     2. Extract IPs from Received headers (infrastructure context).
-    3. Extract URLs from body (body_url context).
+    3. Extract URLs from body (body_url context), normalised.
     4. Extract email addresses from From/Reply-To/Return-Path.
-    5. Extract attachment hashes.
-    6. For each IOC: upsert into ``iocs``, link to ``email_iocs``.
+    5. Extract domains: URL hosts, sender domains, external Received hosts.
+    6. Extract attachment hashes.
+    7. For each IOC: upsert into ``iocs``, link to ``email_iocs``.
 
     Parameters
     ----------
@@ -58,6 +62,7 @@ def ingest_parsed_email(
     # must not grow on rescans.
     already_stored = db.email_exists(parsed.file_sha256)
     email_id = db.upsert_email(parsed)
+    db.replace_attachments(email_id, parsed.attachments)
     if already_stored:
         return email_id
 
@@ -92,11 +97,14 @@ def ingest_parsed_email(
     # ------------------------------------------------------------------
     # 3. URLs (body_url context — strict whitelist)
     # ------------------------------------------------------------------
-    for url in parsed.urls:
-        domain = _domain_from_url(url)
+    for raw_url in parsed.urls:
+        url = normalize_url(raw_url)
+        domain = domain_from_url(url)
         if domain and whitelist.is_whitelisted(domain, context="body_url"):
             continue
         add("url", url, "body_url")
+        if domain:
+            add("domain", domain, "url_domain")
 
     # ------------------------------------------------------------------
     # 4. Email addresses from key headers
@@ -107,10 +115,20 @@ def ingest_parsed_email(
         parsed.headers.return_path,
     ])
     for addr in extract_email_addresses(header_text):
-        domain = addr.split("@", 1)[-1]
-        if whitelist.is_whitelisted(domain, context="sender"):
+        domain = email_domain(addr)
+        if domain and whitelist.is_whitelisted(domain, context="sender"):
             continue
         add("email", addr, "header_email")
+        if domain:
+            add("domain", domain, "sender_domain")
+
+    # ------------------------------------------------------------------
+    # 4b. Host names of external Received hops (the relay's own name)
+    # ------------------------------------------------------------------
+    for hop in parsed.received_chain:
+        host = normalize_domain(hop.from_host) if hop.is_external else None
+        if host and not whitelist.is_whitelisted(host, context="infrastructure"):
+            add("domain", host, "received_host")
 
     # ------------------------------------------------------------------
     # 5. Attachment hashes
@@ -124,24 +142,3 @@ def ingest_parsed_email(
             add(hash_type, hash_val, "attachment_hash")
 
     return email_id
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _domain_from_url(url: str) -> str:
-    """Extract the domain/host from a URL string.
-
-    Returns empty string on failure.
-    """
-    try:
-        # Trim scheme
-        rest = url.split("://", 1)[1]
-        # Trim path / query / fragment
-        domain = rest.split("/")[0].split("?")[0].split("#")[0]
-        # Trim port
-        domain = domain.split(":")[0]
-        return domain.lower()
-    except (IndexError, AttributeError):
-        return ""
