@@ -31,6 +31,8 @@ from typing import Any
 
 import yaml
 
+from core.ioc.flags import SUBJECT_PATTERN_LABELS
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -353,6 +355,9 @@ class RiskScorer:
         attachments: list[dict[str, str]] | None = None,
         ioc_scores: dict[str, IocScore] | None = None,
         urls: list[str] | None = None,
+        return_path_mismatch: bool = False,
+        display_name_spoof: bool = False,
+        subject_patterns: list[str] | None = None,
     ) -> EmailScore:
         """Compute the risk score for a whole email.
 
@@ -370,6 +375,12 @@ class RiskScorer:
             Pre-computed per-IOC scores keyed by IOC value.
         urls : list[str]
             URLs extracted from the email body.
+        return_path_mismatch : bool
+            The Return-Path (envelope sender) domain differs from the From domain.
+        display_name_spoof : bool
+            The From display name shows an address on a different domain.
+        subject_patterns : list[str]
+            Lure categories matched in the subject (see ``core.ioc.flags``).
 
         Returns
         -------
@@ -404,6 +415,25 @@ class RiskScorer:
         if mismatch_factor:
             breakdown.append(mismatch_factor)
             tags.append("masquerading")
+
+        # 2b. Envelope-sender, display-name and subject-wording signals
+        if return_path_mismatch:
+            breakdown.append(ScoreFactor(
+                factor="return_path_mismatch",
+                points=self._w("return_path_mismatch", "max_points", 5),
+                reason="Return-Path (envelope sender) domain differs from the From domain",
+            ))
+            tags.append("masquerading")
+        if display_name_spoof:
+            breakdown.append(ScoreFactor(
+                factor="display_name_spoof",
+                points=self._w("display_name_spoof", "max_points", 10),
+                reason="The sender's display name shows an address on a different domain",
+            ))
+            tags.append("masquerading")
+        lure_factor = self._score_subject_lure(subject_patterns or [])
+        if lure_factor:
+            breakdown.append(lure_factor)
 
         # 3. Dangerous attachments
         attach_factor, attach_tags = self._score_attachments(attachments)
@@ -672,6 +702,21 @@ class RiskScorer:
             factor="reply_to_mismatch",
             points=max_pts,
             reason=f"Reply-To domain ({reply_domain}) ≠ From domain ({from_domain})",
+        )
+
+    def _score_subject_lure(self, patterns: list[str]) -> ScoreFactor | None:
+        """Score phishing-style wording in the subject (a small, capped signal)."""
+        if not patterns:
+            return None
+        section = self._w_section("subject_lure")
+        per_category = float(section.get("points_per_category", 2))
+        max_pts = float(section.get("max_points", 6))
+        points = min(per_category * len(patterns), max_pts)
+        labels = ", ".join(SUBJECT_PATTERN_LABELS.get(name, name) for name in patterns)
+        return ScoreFactor(
+            factor="subject_lure",
+            points=points,
+            reason=f"Subject wording typical of phishing/spam: {labels}",
         )
 
     def _score_attachments(

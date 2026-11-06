@@ -46,6 +46,23 @@ core/mapping/mitre_attack.py ← MitreMapper (behaviour tags → T-codes)
 | **Reply-To Mismatch** | 10 | Parser `HeaderInfo` | Full 10 pts when `From` domain ≠ `Reply-To` domain. |
 | **Dangerous Attachment** | 15 | Parser `AttachmentInfo` | Executable extensions: 15 pts. Macro-enabled docs: 12 pts. Double extensions: 15 pts. |
 | **IOC Intelligence** | 35 | Per-IOC scores | `max(ioc_score) × 0.5`, capped at 35. The worst IOC lifts the email score. |
+| **Return-Path Mismatch** | 5 | Parser `HeaderInfo` | 5 pts when the `Return-Path` (envelope sender) domain differs from the `From` domain. Low on purpose: mailing lists and bulk-mail services legitimately do this. |
+| **Display-Name Spoof** | 10 | Parser `HeaderInfo` | 10 pts when the `From` display name contains an address on another domain (`"support@paypal.com" <x@evil.org>`). |
+| **Subject Lure** | 6 | Subject keyword rules (`core/ioc/flags.py`) | 2 pts per matched category (urgency, payment/invoice, account security, prize/gift, shipping), capped at 6. |
+
+> **Status of the three mail-level flag weights (added in week 2).** They were chosen from first
+> principles, not fitted to data, and are listed in `data/scoring_weights.yaml` so they can be
+> retuned without code changes. A first measurement on the labelled "Email Dataset"
+> (2,977 ham / 2,986 spam, random sample) found **no improvement in separating spam from ham**:
+> ROC-AUC 0.52 without the flags and 0.52 with them (0.48 → 0.41 on the mails that have headers).
+> Reasons: `Return-Path` differs on 27 % of that ham (mailing-list traffic) versus 9 % of the spam;
+> the *Subject Lure* rule is the only flag that discriminates (0.8 % ham vs 11.2 % spam); that corpus
+> carries no `Authentication-Results` headers, so the authentication factor never fires; and the
+> *Frequency* factor rewards repeated indicators, which favours a single organisation's recurring
+> ham addresses (switching it off raised AUC to 0.55). The corpus is generic spam versus ham, not
+> targeted phishing, so these numbers say little about the intended use (triage inside a folder
+> of company spam). The weights must be calibrated and evaluated on a held-out split before any
+> accuracy claim is made.
 
 ### Final Score
 

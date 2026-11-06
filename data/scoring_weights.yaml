@@ -84,3 +84,14 @@ ioc_frequency:
   max_points: 10
   # Points = min(frequency / high_freq_threshold * max_points, max_points)
   high_freq_threshold: 20
+
+# -- Mail-level flags (week 2).  Starting values chosen from first principles,
+# NOT fitted to any data set; retune after evaluation. ---------------------
+return_path_mismatch:
+  max_points: 5          # envelope sender domain differs from From; common for
+                         # legitimate mailing services, so deliberately low
+display_name_spoof:
+  max_points: 10         # display name shows an address on another domain
+subject_lure:
+  points_per_category: 2 # urgency / payment / account-security / prize / shipping
+  max_points: 6

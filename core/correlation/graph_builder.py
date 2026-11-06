@@ -17,6 +17,7 @@ import networkx as nx
 from pyvis.network import Network
 
 from core.correlation.models import Campaign, NodeDetails
+from core.scoring.mail_score import email_flag_inputs
 from core.scoring.risk_score import RiskScorer
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,7 @@ class ThreatGraphBuilder:
                 attachments=attachments,
                 ioc_scores=ioc_scores,
                 urls=[i.get("value", "") for i in iocs_for_this if i.get("type") == "url"],
+                **email_flag_inputs(email),
             )
             score = email_score_obj.score
 

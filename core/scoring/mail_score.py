@@ -10,6 +10,7 @@ data, so every screen (mail list, mail detail, graph) shows the same number:
 * attachments (name, MIME type)   -> the ``attachments`` table
 * IOC scores, including cached enrichment results (VirusTotal, AbuseIPDB, ...)
 * URLs                            -> IOCs of type ``url``
+* Return-Path mismatch, display-name spoof, subject lure wording -> flag columns
 """
 from __future__ import annotations
 
@@ -29,6 +30,19 @@ def _json_dict(value: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def email_flag_inputs(email: dict[str, Any]) -> dict[str, Any]:
+    """Keyword arguments for ``score_email`` taken from a stored mail's flag columns.
+
+    Rows written before schema v2 have no flags and give "no flag set".
+    """
+    flags = _json_dict(email.get("flags_json"))
+    return {
+        "return_path_mismatch": bool(email.get("return_path_mismatch")),
+        "display_name_spoof": bool(flags.get("display_name_spoof")),
+        "subject_patterns": list(flags.get("subject_patterns") or []),
+    }
 
 
 def score_stored_email(
@@ -62,6 +76,7 @@ def score_stored_email(
         ],
         ioc_scores=ioc_scores,
         urls=[i["value"] for i in iocs if i["type"] == "url"],
+        **email_flag_inputs(email),
     )
 
 
