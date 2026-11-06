@@ -35,6 +35,9 @@ from core.ioc.flags import SUBJECT_PATTERN_LABELS
 
 logger = logging.getLogger(__name__)
 
+#: Upper bound on remembered lookalike results (cleared when reached).
+_LOOKALIKE_CACHE_MAX = 100_000
+
 # ---------------------------------------------------------------------------
 # Data directory resolution
 # ---------------------------------------------------------------------------
@@ -172,6 +175,32 @@ def levenshtein(s: str, t: str) -> int:
     return prev_row[-1]
 
 
+def levenshtein_bounded(s: str, t: str, max_dist: int) -> int:
+    """Edit distance between *s* and *t* if it is ``<= max_dist``, else ``max_dist + 1``.
+
+    Same result as ``min(levenshtein(s, t), max_dist + 1)`` but stops as soon as no
+    alignment can stay within *max_dist* (the smallest value of a row never
+    decreases), which makes comparing unrelated strings almost free.
+    """
+    if len(s) < len(t):
+        s, t = t, s
+    if len(s) - len(t) > max_dist:
+        return max_dist + 1
+    prev_row = list(range(len(t) + 1))
+    for i, c1 in enumerate(s, start=1):
+        curr_row = [i]
+        row_min = i
+        for j, c2 in enumerate(t, start=1):
+            value = min(prev_row[j] + 1, curr_row[j - 1] + 1, prev_row[j - 1] + (c1 != c2))
+            curr_row.append(value)
+            if value < row_min:
+                row_min = value
+        if row_min > max_dist:
+            return max_dist + 1
+        prev_row = curr_row
+    return min(prev_row[-1], max_dist + 1)
+
+
 # ---------------------------------------------------------------------------
 # Brand list loader
 # ---------------------------------------------------------------------------
@@ -250,6 +279,9 @@ class RiskScorer:
     ) -> None:
         self._weights = _load_weights(weights_path)
         self._brands = _load_brands(brands_path)
+        # domain -> lookalike result.  The same domain shows up in many mails and the
+        # brand comparison is the most expensive part of scoring, so remember it.
+        self._lookalike_cache: dict[str, ScoreFactor | None] = {}
 
     # -- convenience weight getters -----------------------------------------
 
@@ -775,7 +807,18 @@ class RiskScorer:
         )
 
     def _score_lookalike(self, domain: str) -> ScoreFactor | None:
-        """Detect typosquat / homoglyph domains against the brand list."""
+        """Detect typosquat / homoglyph domains against the brand list (cached per domain)."""
+        key = domain.lower()
+        if key in self._lookalike_cache:
+            return self._lookalike_cache[key]
+        result = self._compute_lookalike(domain)     # ScoreFactor is frozen, so sharing it is safe
+        if len(self._lookalike_cache) >= _LOOKALIKE_CACHE_MAX:
+            self._lookalike_cache.clear()
+        self._lookalike_cache[key] = result
+        return result
+
+    def _compute_lookalike(self, domain: str) -> ScoreFactor | None:
+        """Uncached typosquat / homoglyph check (see :meth:`_score_lookalike`)."""
         section = self._w_section("lookalike")
         threshold = int(section.get("levenshtein_threshold", 2))
         homoglyph_pts = float(section.get("homoglyph_points", 15))
@@ -810,7 +853,7 @@ class RiskScorer:
         for brand in self._brands:
             if registrable == brand:
                 continue  # exact match = it IS the brand, not a lookalike
-            dist = levenshtein(registrable, brand)
+            dist = levenshtein_bounded(registrable, brand, threshold)
             if dist <= threshold:
                 points = min(levenshtein_pts, max_pts)
                 return ScoreFactor(
