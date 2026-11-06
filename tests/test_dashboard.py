@@ -28,7 +28,8 @@ def qapp() -> QApplication:
     """Ensure QApplication instance exists for PyQt6 tests."""
     app = QApplication.instance()
     if app is None:
-        app = QApplication([])
+        # argv must not be empty: Qt WebEngine (Chromium) needs a program name
+        app = QApplication(["mailintel-tests"])
     return app
 
 

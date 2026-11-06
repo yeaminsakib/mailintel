@@ -1816,6 +1816,7 @@ class DashboardWindow(QMainWindow):
         self.graph_web_layout.setContentsMargins(0, 0, 0, 0)
 
         self.graph_web_view: QWebEngineView | None = None
+        self._graph_page: GraphPage | None = None
         self.graph_splitter.addWidget(self.graph_web_container)
 
         # Right Container: Details Drawer
@@ -2007,11 +2008,14 @@ class DashboardWindow(QMainWindow):
             # The graph HTML holds attacker-controlled text, so render it in a
             # locked-down page (no navigation, no remote/file access).  Created
             # here rather than with the view so no web page exists until needed.
-            if not isinstance(self.graph_web_view.page(), GraphPage):
+            if self._graph_page is None:
+                # Do not call view.page() first: that would build Qt's default
+                # (unrestricted) page just to replace it.
                 page = GraphPage(self.graph_web_view)
                 page.nodeSelected.connect(self.on_graph_node_clicked)
                 page.nodeDeselected.connect(self.on_graph_node_deselected)
                 self.graph_web_view.setPage(page)
+                self._graph_page = page
             self.graph_web_view.setHtml(html)
 
         self.on_graph_node_deselected()

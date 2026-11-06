@@ -70,3 +70,11 @@ warn_return_any = false
 warn_unused_configs = true
 ignore_missing_imports = true
 
+# PyQt6 6.12 ships a QtGui.pyi that is not valid Python ("*args, /"), so mypy
+# cannot parse it.  matplotlib (used by the `evaluate` command) references Qt,
+# which would drag the stub in; do not follow into PyQt6 at all.
+[[tool.mypy.overrides]]
+module = ["PyQt6.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
