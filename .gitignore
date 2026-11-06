@@ -38,18 +38,21 @@ mailintel.db
 *.sqlite3
 
 # Logs and Output
-case_log/
 *.log
+
+# Personal project material (brief, slides, recordings) kept next to the code
 Project/
-scratch/
 
 # Data and Samples
 *.eml
 !tests/fixtures/*.eml
-test_emails/
 # (Only ignoring contents of data/, we want to keep data/whitelist.yaml)
 data/*
 !data/whitelist.yaml
+!data/scoring_weights.yaml
+!data/mitre_map.yaml
+!data/brands.txt
+!data/DATASETS.md
 
 # IDE / OS Files
 .vscode/

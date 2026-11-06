@@ -85,7 +85,7 @@ flowchart TD
 ## 🚀 Installation & Quick Start
 
 ### 1. Prerequisites
-- Python 3.11, 3.12, or 3.14
+- Python 3.12 (recommended; 3.11 to 3.14 are supported)
 - Git
 
 ### 2. Local Setup
@@ -95,12 +95,12 @@ git clone https://github.com/yeaminsakib/mailintel.git
 cd mailintel
 
 # Create and activate a virtual environment
-python -m venv venv
+python -m venv .venv
 
 # Windows:
-.\venv\Scripts\activate
+.\.venv\Scripts\activate
 # Linux/macOS:
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install dependencies in editable mode
 pip install -e ".[dev]"
@@ -116,23 +116,25 @@ MailIntel features a headless **Typer CLI** for automated SOC workflows, pipelin
 # View available commands
 mailintel --help
 
-# 1. Scan a folder of .eml files and display top indicators
-mailintel scan ./test_emails
+# 1. Scan a folder of .eml files (sub-folders included; --no-recursive and --max-size-mb
+#    are available) and display top indicators. Files that are empty, too large or
+#    unreadable are skipped and listed with the reason
+mailintel scan ./tests/fixtures
 
 # 2. Scan, run live threat intelligence enrichment, and export STIX 2.1 bundle
-mailintel scan ./test_emails --enrich --export stix --output ./exports/stix_bundle.json
+mailintel scan ./tests/fixtures --enrich --export stix --output ./exports/stix_bundle.json
 
 # 3. Scan and export MISP Event JSON
-mailintel scan ./test_emails --export misp --output ./exports/misp_event.json
+mailintel scan ./tests/fixtures --export misp --output ./exports/misp_event.json
 
 # 4. Generate a standalone HTML incident report
-mailintel scan ./test_emails --export html --output ./exports/incident_report.html
+mailintel scan ./tests/fixtures --export html --output ./exports/incident_report.html
 
 # 5. Generate a formal PDF incident report with lead analyst signature
-mailintel scan ./test_emails --export pdf --output ./exports/incident_report.pdf --analyst "Jane Doe (Lead DFIR)"
+mailintel scan ./tests/fixtures --export pdf --output ./exports/incident_report.pdf --analyst "Jane Doe (Lead DFIR)"
 
 # 6. Export all formats simultaneously (STIX, MISP, HTML, PDF, CSV)
-mailintel scan ./test_emails --export all --output ./exports/
+mailintel scan ./tests/fixtures --export all --output ./exports/
 
 # 7. Generate an incident report directly from an existing database
 mailintel report --format pdf --output ./final_report.pdf --analyst "SOC Lead"
@@ -209,7 +211,7 @@ Run MailIntel headlessly inside an isolated container:
 docker build -t mailintel:latest .
 
 # Run CLI analysis on a mounted directory of .eml samples
-docker run --rm -v $(pwd)/test_emails:/workspace/samples -v $(pwd)/exports:/reports \
+docker run --rm -v $(pwd)/tests/fixtures:/workspace/samples -v $(pwd)/exports:/reports \
     mailintel:latest scan /workspace/samples --export stix --output /reports/stix_bundle.json
 ```
 
@@ -220,14 +222,14 @@ docker run --rm -v $(pwd)/test_emails:/workspace/samples -v $(pwd)/exports:/repo
 MailIntel maintains comprehensive test coverage across all forensic, parsing, scoring, correlation, and export engines.
 
 ```bash
-# Run the complete test suite (284 passing tests)
+# Run the complete test suite
 pytest -v
 
 # Run the Ruff linter
 ruff check .
 
 # Run the Mypy static type checker
-mypy core cli evaluation
+mypy core cli
 ```
 
 ---
@@ -236,37 +238,35 @@ mypy core cli evaluation
 
 ```
 mailintel/
-├── app/                      # PyQt6 UI (Dashboard, Cases, Graph, Config)
-│   ├── dashboard.py          # Main application window & export modal
-│   └── workers.py            # Background QThread ingestion & enrichment workers
-├── cli/                      # Typer CLI application
-│   └── main.py               # `mailintel scan`, `mailintel report`, and `mailintel evaluate`
+├── app/                      # PyQt6 desktop UI
+│   ├── dashboard.py          # Main window: Dash, Mails, Cases, Graph, Intel and Config pages
+│   ├── graph_view.py         # Locked-down web page that shows the attack graph
+│   ├── workers.py            # Background QThread scan / enrichment / export workers
+│   └── theme.py              # Dark theme (QSS)
+├── cli/                      # Typer CLI: `mailintel scan | report | evaluate`
 ├── core/
 │   ├── correlation/          # Campaign clustering & NetworkX graph engine
-│   ├── enrichment/           # VirusTotal, AbuseIPDB, abuse.ch, OTX, RDAP
-│   ├── export/               # STIX 2.1, MISP 2.4, HTML, and ReportLab PDF exporters
-│   ├── ioc/                  # Regex extractors, defanging, and whitelist policy
+│   ├── enrichment/           # VirusTotal, AbuseIPDB, abuse.ch, OTX, RDAP + cache and rate limiting
+│   ├── export/               # STIX 2.1, MISP 2.4, HTML and ReportLab PDF exporters
+│   ├── ioc/                  # Extractors, normalisation, defanging, whitelist, per-mail flags
 │   ├── mapping/              # MITRE ATT&CK technique mapper
-│   ├── parser/               # EML parser, MIME decoder, attachment hasher
-│   ├── scoring/              # Explainable 0-100 risk scoring engine
-│   └── storage/              # SQLite database (WAL mode), migrations, schema
-├── evaluation/               # Scientific evaluation & benchmarking harness
-│   ├── dataset.py            # Benchmark ground truth and SpamAssassin ham loader
-│   ├── ioc_evaluator.py      # Indicator extraction precision/recall engine
-│   ├── scoring_evaluator.py  # Score distribution, AUROC, AUPRC, Youden index
-│   ├── ml_baseline.py        # TF-IDF + Header features Logistic Regression baseline
-│   ├── error_analysis.py     # False positive / false negative forensic analyzer
-│   ├── plots.py              # Publication-grade 300 DPI visualizations
-│   ├── report_generator.py   # Academic evaluation report & CSV/Markdown generator
-│   └── run_evaluation.py     # Evaluation CLI runner
-├── data/
+│   ├── parser/               # EML parser, MIME decoding, headers, attachment hashing
+│   ├── scoring/              # Explainable 0-100 risk scoring (per indicator and per mail)
+│   └── storage/              # SQLite (WAL), schema + migrations, ingest, folder scan, CSV export
+├── evaluation/               # Evaluation and benchmarking harness (extraction, scoring, ML baseline)
+├── data/                     # Editable configuration; datasets stay local (see data/DATASETS.md)
+│   ├── scoring_weights.yaml  # Risk-score weights, changeable without code changes
 │   ├── mitre_map.yaml        # MITRE ATT&CK technique mappings
 │   ├── whitelist.yaml        # Domain and infrastructure whitelist rules
-│   └── brand_domains.yaml    # Target brands for homoglyph/typosquat detection
-├── tests/                    # 284 unit and integration tests
-├── Dockerfile                # Production container specification
-├── pyproject.toml            # Project packaging & dependency specifications
-└── .github/workflows/ci.yml  # GitHub Actions CI workflow (pytest + ruff + mypy)
+│   ├── brands.txt            # Brand names for homoglyph / typosquat detection
+│   └── DATASETS.md           # What the local dataset folders are
+├── docs/                     # Scoring model and the historical QA report
+├── tests/                    # Unit and integration tests; sample mails in tests/fixtures
+├── main.py                   # GUI entry point (`python main.py`)
+├── cli.py                    # `python cli.py ...` shim for the CLI
+├── Dockerfile                # Headless CLI container
+├── pyproject.toml            # Packaging and dependency specification
+└── .github/workflows/ci.yml  # GitHub Actions CI (pytest + ruff + mypy)
 ```
 
 ---

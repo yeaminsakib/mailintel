@@ -34,7 +34,7 @@ mailintel = "cli.main:app"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*", "core*", "cli*"]
-exclude = ["tests*", "evaluation*", "data*", "case_log*", "test_emails*", "scratch*", "Project*"]
+exclude = ["tests*", "evaluation*", "data*", "Project*"]
 
 [tool.setuptools]
 # cli.py stays a run-from-source shim (python cli.py ...); the installed

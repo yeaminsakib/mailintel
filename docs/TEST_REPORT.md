@@ -1,3 +1,10 @@
+> **Historical report.** This QA report was written for the Phase 5 state of the project
+> (commit `4597c2e`). It is kept for reference but is **out of date**: it predates domain IOCs,
+> the stored mail content (schema v2), the shared folder scanner, the Mails page and several bug
+> fixes, so test counts, coverage figures and some statements below (for example which IOC types
+> were stored and the description of the packaging) no longer match the code. For the current
+> state run `pytest`, `ruff check .` and `mypy core cli`, or see `PROJECT_STATUS.md`.
+
 # MailIntel Comprehensive QA & Verification Test Report
 
 ## 1. Test Environment
