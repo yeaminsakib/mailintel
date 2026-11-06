@@ -105,6 +105,7 @@ class ThreatGraphBuilder:
         email_iocs_map: dict[int, list[dict[str, Any]]],
         campaigns: list[Campaign] | None = None,
         max_nodes: int = 150,
+        email_attachments_map: dict[int, list[dict[str, Any]]] | None = None,
     ) -> nx.Graph:
         """Construct the NetworkX entity relationship graph.
 
@@ -119,6 +120,9 @@ class ThreatGraphBuilder:
         max_nodes : int
             Maximum number of entities to include in the visual graph to preserve
             browser rendering fluidity and responsive interactions.
+        email_attachments_map : dict[int, list[dict[str, Any]]] | None
+            Stored attachment rows per email id (``Database.get_attachments_for_emails``).
+            Lets the email score include dangerous / macro-enabled attachments.
 
         Returns
         -------
@@ -162,10 +166,24 @@ class ThreatGraphBuilder:
                 freq = int(ioc.get("frequency") or 1)
                 ioc_scores[val] = self.scorer.score_ioc(itype, val, frequency=freq)
 
+            auth = email.get("auth_json")
+            if isinstance(auth, str):
+                try:
+                    auth = json.loads(auth or "{}")
+                except Exception:
+                    auth = {}
+            auth = auth if isinstance(auth, dict) else {}
+            attachments = [
+                {"filename": a.get("filename", ""), "mime_type": a.get("mime_type", "")}
+                for a in (email_attachments_map or {}).get(eid, [])
+            ]
             email_score_obj = self.scorer.score_email(
+                auth_results={k: str(auth.get(k, "none")) for k in ("spf", "dkim", "dmarc")},
                 from_addr=from_addr,
                 reply_to=headers.get("reply_to", ""),
+                attachments=attachments,
                 ioc_scores=ioc_scores,
+                urls=[i.get("value", "") for i in iocs_for_this if i.get("type") == "url"],
             )
             score = email_score_obj.score
 

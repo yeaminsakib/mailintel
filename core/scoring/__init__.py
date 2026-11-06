@@ -10,6 +10,7 @@ ScoreFactor
 IocScore / EmailScore
     Aggregated result with breakdown.
 """
+from .mail_score import score_emails, score_stored_email
 from .risk_score import EmailScore, IocScore, RiskScorer, ScoreFactor
 
 __all__ = [
@@ -17,4 +18,6 @@ __all__ = [
     "IocScore",
     "RiskScorer",
     "ScoreFactor",
+    "score_emails",
+    "score_stored_email",
 ]

@@ -255,3 +255,32 @@ def test_case_view_lists_subject_and_sender(qapp, test_db_path):
     assert "(no subject)" not in text
     assert email["from_addr"] in text
     db.close()
+
+
+def test_scan_issues_button_and_report(qapp, test_db_path):
+    """Skipped/failed files from a scan must be visible to the analyst."""
+    window = DashboardWindow(db_path=test_db_path)
+    assert window.scan_issues_btn.isHidden()
+
+    window.hide_scan_progress({
+        "emails_scanned": 3, "emails_new": 2, "emails_duplicate": 1, "iocs_found": 5,
+        "files_skipped": 1, "files_failed": 1, "cancelled": False,
+        "problems": [
+            {"kind": "empty", "name": "e.eml", "reason": "file is empty (0 bytes)"},
+            {"kind": "error", "name": "b.eml", "reason": "RuntimeError: boom"},
+        ],
+        "problems_total": 4,
+    })
+    assert not window.scan_issues_btn.isHidden()
+    assert "4" in window.scan_issues_btn.text()
+    report = window.format_scan_problems()
+    assert "e.eml" in report and "boom" in report and "and 2 more" in report
+    message = window.statusBar().currentMessage()
+    assert "2 new" in message and "1 already stored" in message and "1 failed" in message
+
+    # a clean scan hides the button again
+    window.hide_scan_progress({
+        "emails_scanned": 1, "emails_new": 0, "emails_duplicate": 1, "iocs_found": 0,
+        "files_skipped": 0, "files_failed": 0, "cancelled": False, "problems": [], "problems_total": 0,
+    })
+    assert window.scan_issues_btn.isHidden()

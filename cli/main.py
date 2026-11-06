@@ -32,11 +32,10 @@ from core.export.misp_exporter import MispExporter
 from core.export.report_exporter import ReportExporter
 from core.export.stix_exporter import StixExporter
 from core.ioc.defang import defang
-from core.parser.eml_parser import parse_eml_file
 from core.scoring.risk_score import RiskScorer
 from core.storage.database import Database
 from core.storage.export import export_csv_all
-from core.storage.ingest import ingest_parsed_email
+from core.storage.scan import MAX_EML_BYTES, FileProblem, discover_eml_files, scan_folder
 
 app = typer.Typer(
     name="mailintel",
@@ -45,6 +44,23 @@ app = typer.Typer(
 )
 console = Console()
 logger = logging.getLogger("mailintel.cli")
+
+
+def _print_problems(problems: list[FileProblem], *, skipped: int = 0, failed: int = 0, show: int = 10) -> None:
+    """Print which files were not ingested and why (nothing is dropped silently)."""
+    if not problems:
+        return
+    table = Table(title=f"Files not ingested ({len(problems)})", border_style="yellow")
+    table.add_column("Kind", style="yellow", no_wrap=True)
+    table.add_column("File")
+    table.add_column("Reason")
+    for problem in problems[:show]:
+        table.add_row(problem.kind, problem.name, problem.reason)
+    console.print(table)
+    if len(problems) > show:
+        console.print(f"[dim]... and {len(problems) - show} more[/dim]")
+    if skipped or failed:
+        console.print(f"[yellow]{skipped} skipped (empty / too large), {failed} failed.[/yellow]")
 
 
 @app.command()
@@ -92,6 +108,17 @@ def scan(
         "-l",
         help="Limit number of .eml files to scan (0 = all)",
     ),
+    recursive: bool = typer.Option(
+        True,
+        "--recursive/--no-recursive",
+        help="Also scan sub-folders (default) or only the given folder",
+    ),
+    max_size_mb: float = typer.Option(
+        MAX_EML_BYTES / 1_048_576,
+        "--max-size-mb",
+        min=0.001,
+        help="Skip .eml files larger than this many MB (protects memory)",
+    ),
 ) -> None:
     """Scan and parse a directory of .eml email messages for threat intelligence."""
     console.print(
@@ -102,24 +129,20 @@ def scan(
         )
     )
 
-    # 1. Discover .eml files
-    eml_files = sorted(list(folder.glob("**/*.eml")))
-    if limit > 0:
-        eml_files = eml_files[:limit]
+    # 1. Discover .eml files (recursive by default, case-insensitive, symlinks not followed)
+    problems: list[FileProblem] = []
+    eml_files = discover_eml_files(folder, recursive=recursive, limit=limit, problems=problems)
 
     total_files = len(eml_files)
     if total_files == 0:
         console.print(f"[yellow]No .eml files found in {folder}[/yellow]")
+        _print_problems(problems)
         return
 
     console.print(f"[green]Found {total_files:,} .eml files to process.[/green]")
 
-    # 2. Database connection
-    target_db = Database(db_path) if db_path else Database()
-
-    scanned_count = 0
-    new_emails = 0
-    processed_email_ids: list[int] = []
+    # 2. Database connection (batched commits: one fsync per 100 files)
+    target_db = Database(db_path, commit_interval=100) if db_path else Database(commit_interval=100)
 
     # 3. Scan & Ingest
     with Progress(
@@ -131,20 +154,18 @@ def scan(
         console=console,
     ) as progress:
         task = progress.add_task("[cyan]Ingesting emails...", total=total_files)
+        report = scan_folder(
+            folder,
+            target_db,
+            files=eml_files,
+            max_file_bytes=int(max_size_mb * 1024 * 1024),
+            progress=lambda current, total, name: progress.update(task, completed=current),
+        )
+        progress.update(task, completed=total_files)
 
-        for eml_path in eml_files:
-            try:
-                parsed = parse_eml_file(str(eml_path))
-                eid = ingest_parsed_email(parsed, target_db)
-                processed_email_ids.append(eid)
-                scanned_count += 1
-                new_emails += 1
-            except Exception as exc:
-                logger.debug("Failed parsing %s: %s", eml_path.name, exc)
-            finally:
-                progress.update(task, advance=1)
-
-    target_db.batch_commit()
+    report.problems = problems + report.problems
+    processed_email_ids = report.email_ids
+    scanned_count = report.emails_read
 
     # 4. Fetch IOCs and summary metrics
     iocs_map = target_db.get_iocs_for_emails(processed_email_ids)
@@ -156,9 +177,12 @@ def scan(
     iocs_list = list(all_iocs_dict.values())
 
     console.print(
-        f"[bold green]✓ Ingestion Complete:[/bold green] {scanned_count:,} emails processed, "
+        f"[bold green]✓ Ingestion Complete:[/bold green] {scanned_count:,} emails processed "
+        f"({report.new_emails:,} new, {report.duplicates:,} already stored), "
         f"{len(iocs_list):,} unique IOCs extracted."
     )
+    if report.problems:
+        _print_problems(report.problems, skipped=report.skipped, failed=report.failed)
 
     # 5. Enrichment (Optional)
     if enrich and iocs_list:
@@ -188,6 +212,11 @@ def scan(
     clusterer = CampaignClusterer(risk_scorer=scorer)
     db_emails = [target_db.get_email_with_iocs(eid) for eid in processed_email_ids if eid]
     campaigns = clusterer.cluster_emails(db_emails, iocs_map)
+    if clusterer.last_truncated:
+        console.print(
+            f"[yellow]Clustering covered the {clusterer.max_emails:,} most recent emails; "
+            f"{clusterer.last_truncated:,} older ones were left out (memory cap).[/yellow]"
+        )
 
     # 7. Print Terminal Summary Table
     table = Table(title="Top Correlated Threat Indicators", border_style="cyan")
@@ -302,6 +331,11 @@ def report(
 
     clusterer = CampaignClusterer()
     campaigns = clusterer.cluster_emails(emails, iocs_map)
+    if clusterer.last_truncated:
+        console.print(
+            f"[yellow]Clustering covered the {clusterer.max_emails:,} most recent emails; "
+            f"{clusterer.last_truncated:,} older ones were left out (memory cap).[/yellow]"
+        )
 
     rep_exp = ReportExporter(analyst_name=analyst)
     if format.lower() == "pdf":

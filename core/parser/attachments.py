@@ -45,41 +45,44 @@ def extract_attachments(msg: EmailMessage) -> list[AttachmentInfo]:
     attachments: list[AttachmentInfo] = []
 
     for part in msg.walk():
-        # Skip multipart containers
-        if part.get_content_maintype() == "multipart":
-            continue
-
-        content_disp = str(part.get("Content-Disposition", ""))
-        is_attachment = "attachment" in content_disp.lower()
-        filename = part.get_filename()
-
-        # Must be an explicit attachment or carry a filename
-        if not is_attachment and not filename:
-            continue
-
-        # Safe filename fallback
-        if not filename:
-            ext = part.get_content_subtype() or "bin"
-            filename = f"unnamed_attachment.{ext}"
-
-        mime_type = part.get_content_type() or "application/octet-stream"
-
         try:
-            payload = part.get_payload(decode=True)
-            if not isinstance(payload, bytes):
-                continue
+            info = _attachment_from_part(part)
         except Exception:
-            # Malformed attachment — skip without crashing
+            # Malformed part (bad Content-Disposition, undecodable payload, ...):
+            # skip it without losing the other attachments.
             continue
-
-        size = len(payload)
-        hashes = compute_hashes(payload)
-
-        attachments.append(AttachmentInfo(
-            filename=filename,
-            mime_type=mime_type,
-            size=size,
-            hashes=hashes,
-        ))
+        if info is not None:
+            attachments.append(info)
 
     return attachments
+
+
+def _attachment_from_part(part: EmailMessage) -> AttachmentInfo | None:
+    """Return metadata + hashes for one MIME part, or ``None`` if it is not an attachment."""
+    # Skip multipart containers
+    if part.get_content_maintype() == "multipart":
+        return None
+
+    content_disp = str(part.get("Content-Disposition", ""))
+    is_attachment = "attachment" in content_disp.lower()
+    filename = part.get_filename()
+
+    # Must be an explicit attachment or carry a filename
+    if not is_attachment and not filename:
+        return None
+
+    # Safe filename fallback
+    if not filename:
+        ext = part.get_content_subtype() or "bin"
+        filename = f"unnamed_attachment.{ext}"
+
+    payload = part.get_payload(decode=True)
+    if not isinstance(payload, bytes):
+        return None
+
+    return AttachmentInfo(
+        filename=filename,
+        mime_type=part.get_content_type() or "application/octet-stream",
+        size=len(payload),
+        hashes=compute_hashes(payload),
+    )

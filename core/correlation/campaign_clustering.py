@@ -60,17 +60,28 @@ class CampaignClusterer:
         Minimum shared IOCs required for an IOC correlation link.
     risk_scorer : RiskScorer | None
         Optional risk scoring engine to score constituent IOCs and emails.
+    max_emails : int
+        Upper bound on the emails clustered in one call.  The subject-similarity
+        step builds a dense n x n matrix, so memory grows with n squared; when
+        more emails are passed only the most recent ``max_emails`` (highest id)
+        are clustered and :attr:`last_truncated` reports how many were left out.
+        ``0`` disables the cap.
     """
+
+    DEFAULT_MAX_EMAILS: int = 2000
 
     def __init__(
         self,
         tfidf_threshold: float = 0.65,
         min_shared_iocs: int = 1,
         risk_scorer: RiskScorer | None = None,
+        max_emails: int = DEFAULT_MAX_EMAILS,
     ) -> None:
         self.tfidf_threshold = float(tfidf_threshold)
         self.min_shared_iocs = max(1, min_shared_iocs)
         self.scorer = risk_scorer or RiskScorer()
+        self.max_emails = max(0, int(max_emails))
+        self.last_truncated: int = 0
 
     # -------------------------------------------------------------------------
     # TF-IDF Cosine Similarity
@@ -148,8 +159,17 @@ class CampaignClusterer:
         list[Campaign]
             List of detected campaigns sorted by size and risk score.
         """
+        self.last_truncated = 0
         if not emails:
             return []
+
+        if self.max_emails and len(emails) > self.max_emails:
+            self.last_truncated = len(emails) - self.max_emails
+            logger.warning(
+                "Clustering only the %d most recent of %d emails (memory cap)",
+                self.max_emails, len(emails),
+            )
+            emails = sorted(emails, key=lambda e: int(e["id"]), reverse=True)[: self.max_emails]
 
         if email_iocs_map is None:
             email_iocs_map = {}

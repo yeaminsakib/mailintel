@@ -56,14 +56,32 @@ def _is_private_ip(ip: str) -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _raw_header(msg: EmailMessage, name: str) -> str:
+    """Return the first header called *name* as unparsed, unfolded text ('' if absent)."""
+    wanted = name.lower()
+    try:
+        for key, value in msg.raw_items():
+            if key.lower() == wanted:
+                return " ".join(str(value).split())
+    except Exception:
+        pass
+    return ""
+
+
 def extract_headers(msg: EmailMessage) -> HeaderInfo:
     """Extract key headers from an ``EmailMessage``.
 
     Missing headers are returned as empty strings (never ``None``).
     """
     def _get(name: str) -> str:
-        val = msg.get(name, "")
-        return str(val).strip() if val else ""
+        try:
+            val = msg.get(name, "")
+            return str(val).strip() if val else ""
+        except Exception:
+            # The stdlib cannot parse some real-world headers (e.g. the Exim
+            # "To: undisclosed-recipients:; (no To-header on input)@host").
+            # Keep the raw text instead of losing the whole message.
+            return _raw_header(msg, name)
 
     return HeaderInfo(
         from_addr=_get("From"),

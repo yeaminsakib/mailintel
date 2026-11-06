@@ -30,10 +30,26 @@ _CSV_FIELDNAMES: list[str] = [
     "id", "file_sha256", "filename", "filepath",
     "from", "reply_to", "return_path", "subject", "date", "message_id",
     "spf", "dkim", "dmarc",
-    "first_hop_ip", "url_count", "attach_count",
+    "first_hop_ip", "url_count", "attach_count", "attachment_names",
+    "reply_to_mismatch", "return_path_mismatch", "display_name_spoof",
+    "auth_failures", "subject_patterns",
     "ioc_ips", "ioc_domains", "ioc_urls", "ioc_emails", "ioc_hashes",
     "first_seen", "last_seen",
 ]
+
+#: A cell starting with one of these is run as a formula by Excel / LibreOffice.
+_FORMULA_PREFIXES: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _cell(value: Any) -> str:
+    """Make *value* safe to open in a spreadsheet (CSV / formula injection).
+
+    Mail subjects, sender names and file names are attacker-controlled; a
+    subject such as ``=HYPERLINK(...)`` would otherwise execute when the
+    analyst opens the export.  A leading apostrophe turns it into plain text.
+    """
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(_FORMULA_PREFIXES) else text
 
 
 # ---------------------------------------------------------------------------
@@ -49,8 +65,12 @@ def _row_to_csv_record(row: dict[str, Any]) -> dict[str, str]:
     """
     headers: dict = json.loads(row.get("headers_json", "{}"))
     auth: dict    = json.loads(row.get("auth_json",    "{}"))
+    try:
+        flags: dict = json.loads(row.get("flags_json") or "{}")
+    except ValueError:
+        flags = {}
 
-    return {
+    record = {
         "id":           str(row.get("id", "")),
         "file_sha256":  row.get("file_sha256", ""),
         "filename":     row.get("filename", ""),
@@ -67,6 +87,12 @@ def _row_to_csv_record(row: dict[str, Any]) -> dict[str, str]:
         "first_hop_ip": row.get("first_hop_ip", ""),
         "url_count":    str(row.get("url_count", 0)),
         "attach_count": str(row.get("attach_count", 0)),
+        "attachment_names":     row.get("attachment_names", ""),
+        "reply_to_mismatch":    "yes" if row.get("reply_to_mismatch") else "no",
+        "return_path_mismatch": "yes" if row.get("return_path_mismatch") else "no",
+        "display_name_spoof":   "yes" if flags.get("display_name_spoof") else "no",
+        "auth_failures":        ", ".join(flags.get("auth_failures") or []),
+        "subject_patterns":     ", ".join(flags.get("subject_patterns") or []),
         # IOC columns — provided by get_all_emails_with_iocs()
         "ioc_ips":      row.get("ioc_ips", ""),
         "ioc_domains":  row.get("ioc_domains", ""),
@@ -76,6 +102,7 @@ def _row_to_csv_record(row: dict[str, Any]) -> dict[str, str]:
         "first_seen":   row.get("first_seen", ""),
         "last_seen":    row.get("last_seen", ""),
     }
+    return {key: _cell(value) for key, value in record.items()}
 
 
 def _write_csv(rows: list[dict[str, Any]], output_path: Path) -> None:

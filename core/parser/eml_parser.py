@@ -26,7 +26,7 @@ from .headers import (
     parse_auth_results,
     parse_received_chain,
 )
-from .models import ParsedEmail
+from .models import AuthResults, HeaderInfo, ParsedEmail
 from .urls import extract_all_urls
 
 
@@ -86,25 +86,16 @@ def parse_eml_bytes(raw_bytes: bytes) -> ParsedEmail:
     except Exception:
         return ParsedEmail()
 
-    # -- Headers --
-    headers = extract_headers(msg)
-
-    # -- Received chain --
-    received_chain = parse_received_chain(msg)
+    # Every stage is isolated: a header or MIME part the stdlib chokes on must
+    # cost only that stage, never the whole message.
+    headers = _stage(extract_headers, msg, default=HeaderInfo())
+    received_chain = _stage(parse_received_chain, msg, default=[])
     first_external_hop = find_first_external_hop(received_chain)
-
-    # -- Authentication results --
-    auth_results = parse_auth_results(msg)
-
-    # -- Bodies (plain + HTML) --
-    body_plain = _extract_body(msg, "plain")
-    body_html = _extract_body(msg, "html")
-
-    # -- URLs from both bodies --
-    urls = extract_all_urls(body_plain, body_html)
-
-    # -- Attachments --
-    attachments = extract_attachments(msg)
+    auth_results = _stage(parse_auth_results, msg, default=AuthResults())
+    body_plain = _stage(_extract_body, msg, "plain", default="")
+    body_html = _stage(_extract_body, msg, "html", default="")
+    urls = _stage(extract_all_urls, body_plain, body_html, default=[])
+    attachments = _stage(extract_attachments, msg, default=[])
 
     return ParsedEmail(
         headers=headers,
@@ -116,6 +107,14 @@ def parse_eml_bytes(raw_bytes: bytes) -> ParsedEmail:
         urls=urls,
         attachments=attachments,
     )
+
+
+def _stage(func, *args, default):
+    """Run one parsing stage; return *default* if it raises."""
+    try:
+        return func(*args)
+    except Exception:
+        return default
 
 
 def _extract_body(msg: EmailMessage, subtype: str) -> str:

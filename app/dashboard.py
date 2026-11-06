@@ -14,6 +14,7 @@ Wires the PyQt6 dashboard to real SQLite database data and core intelligence eng
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections import defaultdict
@@ -71,7 +72,9 @@ from core.enrichment.rdap import RDAPProvider
 from core.enrichment.virustotal import VirusTotalProvider
 from core.export import MispExporter, ReportExporter, StixExporter
 from core.ioc.defang import defang
+from core.ioc.flags import describe_flags
 from core.mapping.mitre_attack import MitreMapper
+from core.scoring.mail_score import score_emails
 from core.scoring.risk_score import RiskScorer
 from core.storage.database import Database
 
@@ -83,6 +86,21 @@ _DB_PATH: Path = _PROJECT_ROOT / "mailintel.db"
 _DATA_DIR: Path = _PROJECT_ROOT / "data"
 _WHITELIST_PATH: Path = _DATA_DIR / "whitelist.yaml"
 _WEIGHTS_PATH: Path = _DATA_DIR / "scoring_weights.yaml"
+
+
+#: Maximum mails shown in the mail list (the most recent matches; the label says how many exist).
+MAIL_PAGE_SIZE: int = 500
+
+#: Mail-list filter choices: (label, key of ``core.storage.database.MAIL_FLAG_FILTERS``)
+MAIL_FILTER_CHOICES: list[tuple[str, str]] = [
+    ("All mails", "all"),
+    ("Reply-To differs from From", "reply_to_mismatch"),
+    ("Return-Path differs from From", "return_path_mismatch"),
+    ("Display name shows another address", "display_name_spoof"),
+    ("SPF / DKIM / DMARC failed", "auth_failure"),
+    ("Has attachment", "has_attachment"),
+    ("Lure wording in subject", "lure_subject"),
+]
 
 
 def severity_from_score(score: float) -> str:
@@ -212,6 +230,9 @@ class DashboardWindow(QMainWindow):
         self.clusterer = CampaignClusterer(risk_scorer=self.scorer)
         self.graph_builder = ThreatGraphBuilder(risk_scorer=self.scorer)
         self._current_campaigns: list[Campaign] = []
+        # Files the last scan skipped or failed on (shown via "Files not ingested")
+        self.last_scan_problems: list[dict[str, str]] = []
+        self.last_scan_problems_total: int = 0
 
         # Active worker references
         self._enrich_workers: list[EnrichWorker] = []
@@ -276,6 +297,7 @@ class DashboardWindow(QMainWindow):
         # 5 Navigation tool-buttons: Dash, Cases, Graph, Intel, Config
         nav_definitions = [
             ("⚡", "Dash", 0),
+            ("✉️", "Mails", 5),   # shown second; page index 5 keeps the others unchanged
             ("📁", "Cases", 1),
             ("🌐", "Graph", 2),
             ("🛡️", "Intel", 3),
@@ -287,6 +309,7 @@ class DashboardWindow(QMainWindow):
             btn = QPushButton(f"{icon}\n{label}")
             btn.setFixedSize(62, 58)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setProperty("page_index", idx)
             btn.clicked.connect(lambda _, index=idx: self.select_nav_button(index))
             sidebar_layout.addWidget(btn)
             self.nav_buttons.append(btn)
@@ -338,8 +361,9 @@ class DashboardWindow(QMainWindow):
             }
         """
 
-        for idx, btn in enumerate(self.nav_buttons):
-            btn.setStyleSheet(active_style if idx == selected_index else inactive_style)
+        for btn in self.nav_buttons:
+            is_active = btn.property("page_index") == selected_index
+            btn.setStyleSheet(active_style if is_active else inactive_style)
 
         # Trigger page-specific data refresh on tab switch
         if selected_index == 0:
@@ -352,6 +376,8 @@ class DashboardWindow(QMainWindow):
             self.load_intel_data()
         elif selected_index == 4:
             self.load_config_data()
+        elif selected_index == 5:
+            self.load_mails_data()
 
     # =========================================================================
     # CENTER STACKED WIDGET & PAGES
@@ -374,6 +400,9 @@ class DashboardWindow(QMainWindow):
 
         self.config_page = self.create_config_page()
         self.stacked_widget.addWidget(self.config_page)
+
+        self.mails_page = self.create_mails_page()      # page index 5
+        self.stacked_widget.addWidget(self.mails_page)
 
         self.main_layout.addWidget(self.stacked_widget)
 
@@ -587,6 +616,22 @@ class DashboardWindow(QMainWindow):
         """)
         self.add_to_case_btn.clicked.connect(self.handle_add_scan_to_case)
         btn_row.addWidget(self.add_to_case_btn)
+
+        # "Scan issues" button - hidden unless the last scan skipped or failed files
+        self.scan_issues_btn = QPushButton("⚠ Files not ingested")
+        self.scan_issues_btn.setFixedHeight(44)
+        self.scan_issues_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.scan_issues_btn.setVisible(False)
+        self.scan_issues_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(245, 158, 11, 0.15); color: #f59e0b;
+                border: 1px solid #f59e0b; border-radius: 6px;
+                font-weight: 700; font-size: 12px; padding: 0 16px;
+            }
+            QPushButton:hover { background: #f59e0b; color: #0a0e17; }
+        """)
+        self.scan_issues_btn.clicked.connect(self.show_scan_issues)
+        btn_row.addWidget(self.scan_issues_btn)
 
         layout.addLayout(btn_row)
 
@@ -1954,6 +1999,7 @@ class DashboardWindow(QMainWindow):
 
             self._cached_emails = emails
             self._cached_iocs_map = email_iocs_map
+            self._cached_attachments_map = db.get_attachments_for_emails(email_ids)
 
             self._render_active_graph()
         finally:
@@ -1983,6 +2029,7 @@ class DashboardWindow(QMainWindow):
             email_iocs_map=self._cached_iocs_map,
             campaigns=self._current_campaigns,
             max_nodes=max_nodes,
+            email_attachments_map=self._cached_attachments_map,
         )
 
         total_nodes = g.number_of_nodes()
@@ -2718,6 +2765,8 @@ class DashboardWindow(QMainWindow):
         self.load_intel_data()
         if hasattr(self, "stacked_widget") and self.stacked_widget.currentIndex() == 2:
             self.load_graph_data()
+        if hasattr(self, "stacked_widget") and self.stacked_widget.currentIndex() == 5:
+            self.load_mails_data()
 
     def populate_table_from_db(self, db: Database) -> None:
         """Backward-compatibility hook for main.py."""
@@ -2726,6 +2775,207 @@ class DashboardWindow(QMainWindow):
     def update_kpi_from_db(self, db: Database) -> None:
         """Backward-compatibility hook for main.py."""
         self.refresh_all_data()
+
+    # -------------------------------------------------------------------------
+    # PAGE 5: MAILS (list of stored mails with risk score and flags)
+    # -------------------------------------------------------------------------
+    def create_mails_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("contentContainer")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 22, 28, 22)
+        layout.setSpacing(14)
+
+        header_row = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        title = QLabel("Mails")
+        title.setObjectName("headerTitle")
+        subtitle = QLabel("Every stored mail with its risk score, authentication result and warning flags")
+        subtitle.setObjectName("headerSubtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        header_row.addLayout(title_box)
+        header_row.addStretch()
+
+        self.mail_filter = QComboBox()
+        self.mail_filter.setFixedHeight(38)
+        self.mail_filter.setMinimumWidth(240)
+        for label, key in MAIL_FILTER_CHOICES:
+            self.mail_filter.addItem(label, key)
+        self.mail_filter.currentIndexChanged.connect(self.load_mails_data)
+        header_row.addWidget(self.mail_filter)
+
+        self.mail_search = QLineEdit()
+        self.mail_search.setObjectName("searchBar")
+        self.mail_search.setPlaceholderText("Search subject, sender or file name...")
+        self.mail_search.setFixedWidth(300)
+        self.mail_search.setFixedHeight(38)
+        self.mail_search.textChanged.connect(self.load_mails_data)
+        header_row.addWidget(self.mail_search)
+        layout.addLayout(header_row)
+
+        self.mail_count_label = QLabel("No mails stored yet - scan a folder first")
+        self.mail_count_label.setObjectName("recordCountLabel")
+        layout.addWidget(self.mail_count_label)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.mail_table = QTableWidget()
+        self.mail_table.setObjectName("iocTable")
+        self.mail_table.setColumnCount(8)
+        self.mail_table.setHorizontalHeaderLabels(
+            ["Severity", "Score", "Subject", "From", "Date", "Flags", "Att.", "File"]
+        )
+        self.mail_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.mail_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.mail_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.mail_table.setShowGrid(False)
+        self.mail_table.verticalHeader().setVisible(False)
+        self.mail_table.itemSelectionChanged.connect(self.on_mail_selection_changed)
+        hdr = self.mail_table.horizontalHeader()
+        for col, mode in enumerate([
+            QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
+            QHeaderView.ResizeMode.Stretch, QHeaderView.ResizeMode.Stretch,
+            QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.Stretch,
+            QHeaderView.ResizeMode.ResizeToContents, QHeaderView.ResizeMode.ResizeToContents,
+        ]):
+            hdr.setSectionResizeMode(col, mode)
+        splitter.addWidget(self.mail_table)
+
+        self.mail_summary = QPlainTextEdit()
+        self.mail_summary.setReadOnly(True)
+        self.mail_summary.setPlaceholderText("Select a mail to see why it received its score.")
+        self.mail_summary.setMinimumHeight(120)
+        splitter.addWidget(self.mail_summary)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        layout.addWidget(splitter, 1)
+
+        self._mail_scores: dict[int, Any] = {}
+        return page
+
+    def load_mails_data(self, *_args: Any) -> None:
+        """Fill the mail list from the database (filters + search + risk scores)."""
+        db = self.get_db()
+        try:
+            stored = db.get_email_count()
+            self.mail_table.setRowCount(0)
+            self.mail_summary.clear()
+            self._mail_scores = {}
+            if stored == 0:
+                self.mail_count_label.setText("No mails stored yet - scan a folder first")
+                return
+
+            query = self.mail_search.text()
+            flag = self.mail_filter.currentData() or "all"
+            matching = db.count_emails(query, flag)
+            rows = db.search_emails(query, flag, limit=MAIL_PAGE_SIZE)
+            scores = score_emails(self.scorer, db, rows)
+            rows.sort(key=lambda r: (-scores[int(r["id"])].score, -int(r["id"])))
+            self._mail_scores = scores
+            self.populate_mail_table(rows, scores)
+
+            shown = len(rows)
+            suffix = f"  (showing the {shown} most recent)" if matching > shown else ""
+            self.mail_count_label.setText(f"{matching:,} of {stored:,} mails match{suffix}")
+        finally:
+            db.close()
+
+    def populate_mail_table(self, rows: list[dict[str, Any]], scores: dict[int, Any]) -> None:
+        self.mail_table.setRowCount(len(rows))
+        for r, mail in enumerate(rows):
+            score = scores[int(mail["id"])].score
+            try:
+                headers = json.loads(mail.get("headers_json") or "{}")
+            except ValueError:
+                headers = {}
+            subject = mail.get("subject") or headers.get("subject") or "(no subject)"
+            sender = mail.get("from_addr") or headers.get("from_addr") or ""
+            flags = describe_flags(mail)
+
+            badge = QWidget()
+            badge_layout = QHBoxLayout(badge)
+            badge_layout.setContentsMargins(4, 2, 4, 2)
+            badge_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge_layout.addWidget(RiskBadge(severity_from_score(score)))
+            self.mail_table.setCellWidget(r, 0, badge)
+
+            score_item = QTableWidgetItem(f"{score:.0f}/100")
+            score_item.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+            score_item.setForeground(
+                QColor("#ef4444" if score >= 50 else ("#eab308" if score >= 25 else "#10b981"))
+            )
+            self.mail_table.setItem(r, 1, score_item)
+
+            for col, text in (
+                (2, subject), (3, sender), (4, str(headers.get("date", ""))[:31]), (7, mail.get("filename", "")),
+            ):
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.mail_table.setItem(r, col, item)
+            flags_item = QTableWidgetItem(" - ".join(flags))
+            flags_item.setToolTip("\n".join(flags))
+            flags_item.setForeground(QColor("#f59e0b"))
+            self.mail_table.setItem(r, 5, flags_item)
+            self.mail_table.setItem(r, 6, QTableWidgetItem(str(mail.get("attach_count", 0) or "")))
+            self.mail_table.item(r, 2).setData(Qt.ItemDataRole.UserRole, mail)
+
+    def on_mail_selection_changed(self) -> None:
+        """Show the verdict and the score breakdown of the selected mail."""
+        model = self.mail_table.selectionModel()
+        rows = model.selectedRows() if model else []
+        if not rows:
+            self.mail_summary.clear()
+            return
+        mail = self.mail_table.item(rows[0].row(), 2).data(Qt.ItemDataRole.UserRole)
+        result = self._mail_scores.get(int(mail["id"]))
+        if result is None:
+            return
+        lines = [
+            f"{mail.get('subject') or '(no subject)'}",
+            f"From: {mail.get('from_addr', '')}    File: {mail.get('filename', '')}",
+            f"Verdict: {severity_from_score(result.score)}  -  score {result.score:.0f}/100",
+            "",
+        ]
+        flags = describe_flags(mail)
+        if flags:
+            lines.append("Flags: " + "; ".join(flags))
+        if result.breakdown:
+            lines.append("Why this score:")
+            lines += [f"  +{f.points:.1f}  {f.factor}: {f.reason}" for f in result.breakdown]
+        else:
+            lines.append("No risk factors found for this mail.")
+        if result.behaviour_tags:
+            lines.append("Behaviour tags: " + ", ".join(result.behaviour_tags))
+        self.mail_summary.setPlainText("\n".join(lines))
+
+    def format_scan_problems(self) -> str:
+        """Plain-text report of the files the last scan did not ingest."""
+        lines = [f"{p.get('kind', '?'):<10} {p.get('name', '')}  -  {p.get('reason', '')}"
+                 for p in self.last_scan_problems]
+        hidden = self.last_scan_problems_total - len(self.last_scan_problems)
+        if hidden > 0:
+            lines.append(f"... and {hidden} more")
+        return "\n".join(lines)
+
+    def show_scan_issues(self) -> None:
+        """Show which files of the last scan were skipped or failed, and why."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Files not ingested")
+        dialog.resize(760, 420)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"{self.last_scan_problems_total} file(s) were not ingested. "
+            "Skipped = empty or over the size limit; failed = unreadable or a parsing error."
+        ))
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(self.format_scan_problems())
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def show_scan_progress(self) -> None:
         self.progress_bar.setValue(0)
@@ -2747,12 +2997,23 @@ class DashboardWindow(QMainWindow):
         if result:
             scanned = result.get("emails_scanned", 0)
             new = result.get("emails_new", 0)
+            duplicate = result.get("emails_duplicate", 0)
+            skipped = result.get("files_skipped", 0)
+            failed = result.get("files_failed", 0)
             iocs = result.get("iocs_found", 0)
             cancelled = result.get("cancelled", False)
             status = "Cancelled" if cancelled else "Complete"
-            self.statusBar().showMessage(
-                f"Scan {status}: {scanned} scanned, {new} new emails, {iocs} IOCs.", 6000
+            message = (
+                f"Scan {status}: {scanned} emails read ({new} new, {duplicate} already stored), "
+                f"{iocs} new IOCs."
             )
+            if skipped or failed:
+                message += f" {skipped} files skipped, {failed} failed - see 'Files not ingested'."
+            self.statusBar().showMessage(message, 12000)
+            self.last_scan_problems = list(result.get("problems", []))
+            self.last_scan_problems_total = int(result.get("problems_total", len(self.last_scan_problems)))
+            self.scan_issues_btn.setVisible(bool(self.last_scan_problems_total))
+            self.scan_issues_btn.setText(f"⚠ {self.last_scan_problems_total} files not ingested")
             self.refresh_all_data()
             # Show the "Add to Case" button after a successful scan
             if not cancelled and new > 0:

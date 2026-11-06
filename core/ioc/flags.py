@@ -54,6 +54,48 @@ class MailFlags:
         return asdict(self)
 
 
+#: subject pattern name -> label shown to the analyst
+SUBJECT_PATTERN_LABELS: dict[str, str] = {
+    "urgency": "urgent wording",
+    "payment_invoice": "payment / invoice lure",
+    "account_security": "account-security lure",
+    "prize_gift": "prize / gift lure",
+    "shipping": "shipping lure",
+}
+
+
+def describe_flags(email: dict) -> list[str]:
+    """Readable labels for the flags of a stored mail row.
+
+    Works on rows from ``Database.search_emails`` / ``get_recent_emails``.
+    Rows written before schema v2 have no flags and give an empty list.
+    """
+    import json
+
+    try:
+        stored = json.loads(email.get("flags_json") or "{}")
+    except (TypeError, ValueError):
+        stored = {}
+    if not isinstance(stored, dict):
+        stored = {}
+
+    labels: list[str] = []
+    if email.get("reply_to_mismatch"):
+        labels.append("Reply-To differs from From")
+    if email.get("return_path_mismatch"):
+        labels.append("Return-Path differs from From")
+    if stored.get("display_name_spoof"):
+        labels.append("display name shows another address")
+    failures = stored.get("auth_failures") or []
+    if failures:
+        labels.append("auth failed: " + "/".join(str(f).upper() for f in failures))
+    for name in stored.get("subject_patterns") or []:
+        labels.append(SUBJECT_PATTERN_LABELS.get(name, name))
+    if email.get("attach_count"):
+        labels.append(f"{email['attach_count']} attachment(s)")
+    return labels
+
+
 def related_domains(a: str | None, b: str | None) -> bool:
     """True if the domains are equal or one is a subdomain of the other."""
     if not a or not b:

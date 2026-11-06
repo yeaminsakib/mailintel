@@ -22,10 +22,15 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from core.parser.eml_parser import parse_eml_file
 from core.storage.database import Database
 from core.storage.export import export_all_cases
-from core.storage.ingest import ingest_parsed_email
+from core.storage.scan import (
+    MAX_EML_BYTES,
+    FileProblem,
+    ScanReport,
+    discover_eml_files,
+    scan_folder,
+)
 
 
 class ScanWorker(QThread):
@@ -40,8 +45,10 @@ class ScanWorker(QThread):
         Emitted after each file is processed.
     finished(result: dict)
         Emitted when the scan completes (normally or cancelled).
-        Keys: ``emails_scanned``, ``emails_new``, ``iocs_found``,
-        ``cancelled``.
+        Keys: ``emails_scanned`` (read, new + duplicate), ``emails_new``,
+        ``emails_duplicate``, ``files_found``, ``files_skipped`` (empty / too
+        large), ``files_failed``, ``problems`` (list of dicts, capped at 100),
+        ``problems_total``, ``iocs_found``, ``cancelled``.
     error(message: str)
         Emitted if an unrecoverable exception occurs.
     """
@@ -57,10 +64,15 @@ class ScanWorker(QThread):
         folder_path: str,
         db_path: str | None = None,
         parent: Any = None,
+        *,
+        recursive: bool = True,
+        max_file_bytes: int = MAX_EML_BYTES,
     ) -> None:
         super().__init__(parent)
         self._folder_path = folder_path
         self._db_path = db_path
+        self._recursive = recursive
+        self._max_file_bytes = max_file_bytes
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -75,59 +87,41 @@ class ScanWorker(QThread):
             self.error.emit(str(exc))
 
     def _scan(self) -> None:
-        """Core scan loop."""
+        """Discover the files, then parse + ingest them via the shared scanner."""
         folder = Path(self._folder_path)
         if not folder.is_dir():
             self.error.emit(f"Not a directory: {self._folder_path}")
             return
 
-        eml_files = sorted(folder.glob("*.eml"))
-        total = len(eml_files)
+        problems: list[FileProblem] = []
+        files = discover_eml_files(folder, recursive=self._recursive, problems=problems)
 
-        if total == 0:
+        if not files:
             self.finished.emit({
-                "emails_scanned": 0,
-                "emails_new": 0,
+                **ScanReport(problems=problems).to_dict(),
                 "iocs_found": 0,
-                "cancelled": False,
             })
             return
 
-        # Each worker creates its own DB connection (WAL allows concurrent use)
-        # Use batch commits to reduce fsync overhead during large scans
+        # The worker owns its own DB connection (WAL allows concurrent readers).
+        # Batch commits cut fsync overhead; a cancelled scan keeps what it stored.
         db = Database(self._db_path, commit_interval=self._BATCH_SIZE)
-        email_count_before = db.get_email_count()
-        ioc_count_before   = db.get_ioc_count()
+        try:
+            iocs_before = db.get_ioc_count()
+            report = scan_folder(
+                folder,
+                db,
+                files=files,
+                max_file_bytes=self._max_file_bytes,
+                progress=self.progress.emit,
+                should_cancel=lambda: self._cancelled,
+            )
+            report.problems = problems + report.problems
+            iocs_after = db.get_ioc_count()
+        finally:
+            db.close()
 
-        idx = 0
-        for idx, eml_path in enumerate(eml_files, start=1):
-            if self._cancelled:
-                break
-
-            filename = eml_path.name
-            self.progress.emit(idx, total, filename)
-
-            try:
-                parsed = parse_eml_file(eml_path)
-                if parsed.file_sha256:
-                    ingest_parsed_email(parsed, db)
-            except Exception:  # noqa: BLE001
-                # Single-file failures are non-fatal — skip and continue
-                continue
-
-        # Flush any uncommitted writes
-        db.batch_commit()
-
-        emails_now = db.get_email_count()
-        iocs_now   = db.get_ioc_count()
-        db.close()
-
-        self.finished.emit({
-            "emails_scanned": min(idx, total),
-            "emails_new":     emails_now - email_count_before,
-            "iocs_found":     iocs_now   - ioc_count_before,
-            "cancelled":      self._cancelled,
-        })
+        self.finished.emit({**report.to_dict(), "iocs_found": iocs_after - iocs_before})
 
 
 class ExportWorker(QThread):

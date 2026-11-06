@@ -29,6 +29,19 @@ from .schema import EMAILS_V2_COLUMNS, SCHEMA_SQL, SCHEMA_VERSION
 
 # Default DB path — resolved relative to the project root so tests can
 # override it trivially by passing a tmp_path / :memory: connection.
+#: Filters of the mail list: key -> SQL condition on the ``emails`` table.
+#: ``flags_json`` conditions use SQLite's JSON functions; rows written before
+#: schema v2 have ``{}`` there and simply do not match.
+MAIL_FLAG_FILTERS: dict[str, str] = {
+    "all": "",
+    "reply_to_mismatch": "reply_to_mismatch = 1",
+    "return_path_mismatch": "return_path_mismatch = 1",
+    "display_name_spoof": "json_extract(flags_json, '$.display_name_spoof') = 1",
+    "auth_failure": "json_array_length(json_extract(flags_json, '$.auth_failures')) > 0",
+    "has_attachment": "attach_count > 0",
+    "lure_subject": "json_array_length(json_extract(flags_json, '$.subject_patterns')) > 0",
+}
+
 _DEFAULT_DB_PATH: Path = (
     Path(__file__).resolve().parent.parent.parent / "mailintel.db"
 )
@@ -227,6 +240,72 @@ class Database:
             "SELECT * FROM attachments WHERE email_id = ? ORDER BY id", (email_id,)
         )
         return [dict(r) for r in cur.fetchall()]
+
+    def get_attachments_for_emails(self, email_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        """Return attachment rows grouped by email id (one query per 500 ids)."""
+        result: dict[int, list[dict[str, Any]]] = {}
+        for start in range(0, len(email_ids), 500):
+            chunk = email_ids[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            cur = self._conn.execute(
+                f"SELECT * FROM attachments WHERE email_id IN ({placeholders}) ORDER BY id",
+                tuple(chunk),
+            )
+            for r in cur.fetchall():
+                row = dict(r)
+                result.setdefault(row["email_id"], []).append(row)
+        return result
+
+    # ------------------------------------------------------------------
+    # mail list (search + flag filters)
+    # ------------------------------------------------------------------
+
+    def _mail_filter_sql(self, query: str, flag: str) -> tuple[str, list[Any]]:
+        if flag not in MAIL_FLAG_FILTERS:
+            raise ValueError(f"unknown mail filter: {flag!r}")
+        clauses: list[str] = []
+        params: list[Any] = []
+        if flag != "all":
+            clauses.append(MAIL_FLAG_FILTERS[flag])
+        query = query.strip()
+        if query:
+            # '!' is the LIKE escape character, so % and _ in the query are literal
+            escaped = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            like = f"%{escaped}%"
+            clauses.append(
+                "(subject LIKE ? ESCAPE '!' OR from_addr LIKE ? ESCAPE '!' OR filename LIKE ? ESCAPE '!')"
+            )
+            params.extend([like, like, like])
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+    def search_emails(
+        self, query: str = "", flag: str = "all", limit: int = 500, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Return mails for the mail list, newest first.
+
+        *query* matches subject, sender or file name (case-insensitive, literal
+        text - ``%`` and ``_`` are not wildcards).  *flag* is a key of
+        :data:`MAIL_FLAG_FILTERS`.
+        """
+        where, params = self._mail_filter_sql(query, flag)
+        cur = self._conn.execute(
+            f"""
+            SELECT id, file_sha256, filename, filepath, subject, from_addr,
+                   headers_json, auth_json, first_hop_ip, url_count, attach_count,
+                   reply_to_mismatch, return_path_mismatch, flags_json,
+                   first_seen, last_seen
+            FROM emails{where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, int(limit), int(offset)),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def count_emails(self, query: str = "", flag: str = "all") -> int:
+        """Number of mails matching the same filters as :meth:`search_emails`."""
+        where, params = self._mail_filter_sql(query, flag)
+        return int(self._conn.execute(f"SELECT COUNT(*) FROM emails{where}", params).fetchone()[0])
 
     def email_exists(self, file_sha256: str) -> bool:
         """Return True if an email with this SHA-256 is already stored."""
@@ -468,7 +547,14 @@ class Database:
         for email in emails:
             iocs = self.get_iocs_for_email(email["id"])
             email.update(_collapse_iocs(iocs))
+        self._add_attachment_names(emails)
         return emails
+
+    def _add_attachment_names(self, emails: list[dict[str, Any]]) -> None:
+        """Add ``attachment_names`` ("a.pdf; b.exe") to each email dict, using bulk queries."""
+        grouped = self.get_attachments_for_emails([int(e["id"]) for e in emails])
+        for email in emails:
+            email["attachment_names"] = "; ".join(a["filename"] for a in grouped.get(int(email["id"]), []))
 
     def get_emails_for_case_with_iocs(self, case_id: int) -> list[dict[str, Any]]:
         """Return all emails linked to a case with collapsed IOCs."""
@@ -476,6 +562,7 @@ class Database:
         for email in emails:
             iocs = self.get_iocs_for_email(email["id"])
             email.update(_collapse_iocs(iocs))
+        self._add_attachment_names(emails)
         return emails
 
     # ------------------------------------------------------------------
@@ -522,12 +609,22 @@ class Database:
         self._auto_commit()
 
     def get_enrichments_for_ioc(self, ioc_id: int) -> list[dict[str, Any]]:
-        """Return all enrichment results for a given IOC."""
+        """Return all enrichment results for a given IOC.
+
+        Each row also carries ``raw``: the provider response parsed from
+        ``raw_json``.  The risk scorer reads ``raw``; without it stored
+        VirusTotal / AbuseIPDB / RDAP results contributed nothing to a score.
+        """
         cur = self._conn.execute(
             "SELECT * FROM enrichments WHERE ioc_id = ? ORDER BY fetched_at DESC",
             (ioc_id,),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = []
+        for r in cur.fetchall():
+            row = dict(r)
+            row["raw"] = _json_object(row.get("raw_json"))
+            rows.append(row)
+        return rows
 
     def get_enrichment_stats(self) -> dict[str, dict[str, Any]]:
         """Return aggregate enrichment statistics grouped by provider."""
@@ -679,6 +776,15 @@ class Database:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _json_object(text: str | None) -> dict[str, Any]:
+    """Parse *text* as a JSON object; ``{}`` if it is empty, invalid or not an object."""
+    try:
+        value = json.loads(text or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
 
 def _collapse_iocs(iocs: list[dict[str, Any]]) -> dict[str, str]:
     """Collapse a list of IOC rows into typed comma-separated strings.
