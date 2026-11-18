@@ -260,7 +260,7 @@ mailintel/
 │   ├── whitelist.yaml        # Domain and infrastructure whitelist rules
 │   ├── brands.txt            # Brand names for homoglyph / typosquat detection
 │   └── DATASETS.md           # What the local dataset folders are
-├── docs/                     # Scoring model and the historical QA report
+├── docs/                     # Scoring model
 ├── tests/                    # Unit and integration tests; sample mails in tests/fixtures
 ├── main.py                   # GUI entry point (`python main.py`)
 ├── cli.py                    # `python cli.py ...` shim for the CLI
