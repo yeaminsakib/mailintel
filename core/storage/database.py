@@ -397,12 +397,6 @@ class Database:
         )
         return cur.fetchone()[0]
 
-    def get_ioc(self, ioc_id: int) -> dict[str, Any] | None:
-        """Return a single IOC by id, or None if not found."""
-        cur = self._conn.execute("SELECT * FROM iocs WHERE id = ?", (ioc_id,))
-        row = cur.fetchone()
-        return dict(row) if row else None
-
     def get_filtered_iocs(
         self,
         ioc_type: str = "",

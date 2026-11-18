@@ -143,7 +143,3 @@ class WhitelistPolicy:
                 return True
 
         return False
-
-    def get_domains(self, context: str) -> set[str]:
-        """Return the set of whitelisted domains for a context."""
-        return self._cache.get(context, set()).copy()

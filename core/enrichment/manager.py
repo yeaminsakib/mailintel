@@ -198,10 +198,6 @@ class EnrichmentManager:
         """Return names of all initialized providers."""
         return list(self._providers.keys())
 
-    def get_provider(self, name: str) -> BaseProvider | None:
-        """Return a provider instance by name, or ``None``."""
-        return self._providers.get(name)
-
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
