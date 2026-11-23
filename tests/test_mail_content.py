@@ -284,7 +284,7 @@ def v1_db_path(tmp_path: Path) -> Path:
 
 class TestMigration:
     def test_new_database_has_current_version(self, db: Database) -> None:
-        assert db.schema_version() == SCHEMA_VERSION == 2
+        assert db.schema_version() == SCHEMA_VERSION == 3
 
     def test_old_database_is_upgraded_in_place(self, v1_db_path: Path) -> None:
         database = Database(v1_db_path)

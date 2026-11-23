@@ -753,6 +753,135 @@ class Database:
         )
         return [dict(r) for r in cur.fetchall()]
 
+    # ------------------------------------------------------------------
+    # loads (one row per folder load; the Dashboard shows one load)
+    # ------------------------------------------------------------------
+
+    def create_load(
+        self,
+        folder: str,
+        *,
+        started_at: str,
+        files_found: int = 0,
+        emails_new: int = 0,
+        emails_duplicate: int = 0,
+        files_skipped: int = 0,
+        files_failed: int = 0,
+        cancelled: bool = False,
+    ) -> int:
+        """Record one folder load and return its id."""
+        cur = self._conn.execute(
+            """
+            INSERT INTO loads (folder, started_at, finished_at, files_found, emails_new,
+                               emails_duplicate, files_skipped, files_failed, cancelled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (folder, started_at, _now(), files_found, emails_new, emails_duplicate,
+             files_skipped, files_failed, int(cancelled)),
+        )
+        self._auto_commit()
+        if cur.lastrowid is None:  # SQLite always sets it after an INSERT; keeps the type exact
+            raise RuntimeError("could not record the load")
+        return int(cur.lastrowid)
+
+    def add_emails_to_load(self, load_id: int, email_ids: list[int]) -> None:
+        """Link mails to a load (idempotent)."""
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO load_emails (load_id, email_id) VALUES (?, ?)",
+            [(load_id, int(e)) for e in email_ids],
+        )
+        self._auto_commit()
+
+    def get_load(self, load_id: int) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM loads WHERE id = ?", (load_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_loads(self) -> list[dict[str, Any]]:
+        """All loads, newest first, with their mail count."""
+        cur = self._conn.execute(
+            """
+            SELECT l.*, (SELECT COUNT(*) FROM load_emails le WHERE le.load_id = l.id) AS email_count
+            FROM loads l ORDER BY l.id DESC
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_load_email_count(self, load_id: int) -> int:
+        cur = self._conn.execute("SELECT COUNT(*) FROM load_emails WHERE load_id = ?", (load_id,))
+        return int(cur.fetchone()[0])
+
+    def get_load_email_ids(self, load_id: int) -> list[int]:
+        cur = self._conn.execute(
+            "SELECT email_id FROM load_emails WHERE load_id = ? ORDER BY email_id", (load_id,))
+        return [int(r[0]) for r in cur.fetchall()]
+
+    def get_load_iocs(
+        self,
+        load_id: int,
+        *,
+        ioc_type: str = "",
+        search: str = "",
+        exclude_types: list[str] | None = None,
+        exclude_ids: set[int] | list[int] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Indicators found in the mails of one load.
+
+        Each row has ``load_frequency``: in how many mails *of this load* the
+        indicator occurs (the stored ``frequency`` counts all stored mails).
+        Sorted by ``load_frequency`` (most first), then id.
+        """
+        where = ["le.load_id = ?"]
+        params: list[Any] = [load_id]
+        if ioc_type and ioc_type.lower() != "all":
+            where.append("i.type = ?")
+            params.append(ioc_type.lower())
+        elif exclude_types:
+            where.append(f"i.type NOT IN ({','.join('?' * len(exclude_types))})")
+            params.extend(t.lower() for t in exclude_types)
+        if search.strip():
+            escaped = search.strip().replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            where.append("i.value LIKE ? ESCAPE '!'")
+            params.append(f"%{escaped}%")
+        if exclude_ids:
+            ids = [int(i) for i in exclude_ids]
+            where.append(f"i.id NOT IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
+        sql = f"""
+            SELECT i.*, COUNT(DISTINCT ei.email_id) AS load_frequency
+            FROM iocs i
+            JOIN email_iocs ei ON ei.ioc_id = i.id
+            JOIN load_emails le ON le.email_id = ei.email_id
+            WHERE {' AND '.join(where)}
+            GROUP BY i.id
+            ORDER BY load_frequency DESC, i.id ASC
+        """
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([int(limit), int(offset)])
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def count_load_iocs(self, load_id: int, exclude_ids: set[int] | list[int] | None = None) -> int:
+        """Number of different indicators in a load (ignoring *exclude_ids*)."""
+        return len(self.get_load_iocs(load_id, exclude_ids=exclude_ids))
+
+    def get_load_emails_for_ioc(self, load_id: int, ioc_id: int) -> list[dict[str, Any]]:
+        """Full rows of the mails of one load that contain an indicator (newest first)."""
+        cur = self._conn.execute(
+            """
+            SELECT e.*, GROUP_CONCAT(DISTINCT ei.context) AS ioc_context
+            FROM emails e
+            JOIN load_emails le ON le.email_id = e.id
+            JOIN email_iocs ei ON ei.email_id = e.id
+            WHERE le.load_id = ? AND ei.ioc_id = ?
+            GROUP BY e.id
+            ORDER BY e.id DESC
+            """,
+            (load_id, ioc_id),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
     def get_email_count_for_case(self, case_id: int) -> int:
         """Return count of emails linked to a specific case."""
         cur = self._conn.execute(

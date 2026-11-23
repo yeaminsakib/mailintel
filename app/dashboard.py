@@ -18,12 +18,13 @@ import json
 import logging
 import os
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QColor, QCursor, QFont
+from PyQt6.QtGui import QColor, QCursor, QFont, QKeySequence, QShortcut
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -87,7 +88,7 @@ from core.export import MispExporter, ReportExporter, StixExporter
 from core.ioc.defang import defang
 from core.ioc.flags import describe_flags
 from core.mapping.mitre_attack import MitreMapper
-from core.scoring.mail_score import score_emails
+from core.scoring.mail_score import score_emails, score_stored_email
 from core.scoring.risk_score import RiskScorer
 from core.storage.database import Database
 
@@ -100,6 +101,16 @@ _DATA_DIR: Path = _PROJECT_ROOT / "data"
 _WHITELIST_PATH: Path = _DATA_DIR / "whitelist.yaml"
 _WEIGHTS_PATH: Path = _DATA_DIR / "scoring_weights.yaml"
 
+
+#: Rows shown in the Dashboard indicator table (the counters always cover the whole load).
+DASH_TABLE_LIMIT: int = 300
+
+NOTHING_LOADED_TEXT = "Nothing loaded - click \u201cSelect .eml Folder & Analyze\u201d to load mails"
+
+MAIL_VIEW_HINT = (
+    "Click an indicator in the table to open the mail it came from: headers, authentication, "
+    "Received chain, why it scored as it did, its indicators, attachments and body text."
+)
 
 #: Mails read for the Graph page's mail-flow views (the most recent ones).
 FLOW_MAX_EMAILS: int = 5000
@@ -256,6 +267,10 @@ class DashboardWindow(QMainWindow):
         # Files the last scan skipped or failed on (shown via "Files not ingested")
         self.last_scan_problems: list[dict[str, str]] = []
         self.last_scan_problems_total: int = 0
+        # The Dashboard shows one folder load at a time (None = nothing loaded).
+        self.current_load_id: int | None = None
+        self._hidden_ioc_ids: set[int] = set()            # "Delete from this load"
+        self._load_score_cache: dict[int, dict[str, Any]] | None = None
 
         # Active worker references
         self._enrich_workers: list[EnrichWorker] = []
@@ -448,10 +463,11 @@ class DashboardWindow(QMainWindow):
         title_box.setSpacing(2)
         self.header_title = QLabel("Indicator of Compromise Intelligence")
         self.header_title.setObjectName("headerTitle")
-        header_sub = QLabel("Real Forensics Database & Explainable Risk Scoring Engine")
-        header_sub.setObjectName("headerSubtitle")
+        self.load_info_label = QLabel(NOTHING_LOADED_TEXT)
+        self.load_info_label.setObjectName("headerSubtitle")
+        self.load_info_label.setTextFormat(Qt.TextFormat.PlainText)
         title_box.addWidget(self.header_title)
-        title_box.addWidget(header_sub)
+        title_box.addWidget(self.load_info_label)
         header_row.addLayout(title_box)
 
         header_row.addStretch()
@@ -484,10 +500,10 @@ class DashboardWindow(QMainWindow):
         self.kpi_cards: dict[str, QLabel] = {}
 
         kpi_defs = [
-            ("total_emails", "TOTAL EMAILS", "0", "Corpus parsed files in DB", "#00f0ff"),
-            ("unique_iocs", "UNIQUE IOCS", "0", "Extracted indicators", "#38bdf8"),
-            ("high_risk", "HIGH / CRITICAL RISK", "0", "Threat score >= 50", "#ef4444"),
-            ("active_cases", "ACTIVE CASES", "0", "Open forensic dossiers", "#f59e0b"),
+            ("total_emails", "TOTAL EMAILS", "0", "Mails in this load", "#00f0ff"),
+            ("unique_iocs", "UNIQUE IOCS", "0", "Indicators in this load", "#38bdf8"),
+            ("high_risk", "HIGH / CRITICAL RISK", "0", "Score >= 50 in this load", "#ef4444"),
+            ("active_cases", "ACTIVE CASES", "0", "Open cases (all)", "#f59e0b"),
         ]
 
         for key, title, def_val, subtext, accent in kpi_defs:
@@ -559,6 +575,8 @@ class DashboardWindow(QMainWindow):
         self.ioc_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.ioc_table.customContextMenuRequested.connect(self.on_ioc_context_menu)
         self.ioc_table.itemSelectionChanged.connect(self.on_ioc_table_selection_changed)
+        self._delete_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), self.ioc_table)
+        self._delete_shortcut.activated.connect(self.delete_selected_ioc)
 
         hdr = self.ioc_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -574,20 +592,21 @@ class DashboardWindow(QMainWindow):
         # Right Container: Details Drawer
         self.drawer_frame = QFrame()
         self.drawer_frame.setObjectName("rightSidebar")
-        self.drawer_frame.setMinimumWidth(380)
-        self.drawer_frame.setMaximumWidth(460)
+        self.drawer_frame.setMinimumWidth(400)
+        self.drawer_frame.setMaximumWidth(620)
 
         drawer_layout = QVBoxLayout(self.drawer_frame)
         drawer_layout.setContentsMargins(16, 14, 16, 14)
         drawer_layout.setSpacing(12)
 
-        drawer_header = QLabel("INDICATOR DETAILS DRAWER")
+        drawer_header = QLabel("MAIL VIEW")
         drawer_header.setObjectName("rightSidebarTitle")
         drawer_layout.addWidget(drawer_header)
 
         # Scrollable Area inside drawer
         self.drawer_scroll = QScrollArea()
         self.drawer_scroll.setWidgetResizable(True)
+        self.drawer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.drawer_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.drawer_scroll.setStyleSheet("background: transparent;")
 
@@ -597,10 +616,7 @@ class DashboardWindow(QMainWindow):
         self.drawer_content_layout.setSpacing(12)
 
         # Default placeholder when nothing is selected
-        self.drawer_empty_label = QLabel(
-            "Select an indicator from the table to inspect risk breakdown, "
-            "contributing factors, and threat intelligence enrichments."
-        )
+        self.drawer_empty_label = QLabel(MAIL_VIEW_HINT)
         self.drawer_empty_label.setStyleSheet("color: #64748b; font-size: 12px; line-height: 1.4;")
         self.drawer_empty_label.setWordWrap(True)
         self.drawer_content_layout.addWidget(self.drawer_empty_label)
@@ -618,11 +634,30 @@ class DashboardWindow(QMainWindow):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
-        self.analyze_button = QPushButton("Select .eml Folder & Analyze")
+        # "&&" shows a literal "&" (a single "&" marks a keyboard shortcut in Qt)
+        self.analyze_button = QPushButton("Select .eml Folder && Analyze")
         self.analyze_button.setObjectName("analyzeButton")
         self.analyze_button.setFixedHeight(44)
         self.analyze_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_row.addWidget(self.analyze_button, 1)
+
+        # "Clean All" empties the Dashboard; stored mails stay in the database
+        self.clean_all_btn = QPushButton("🧹 Clean All")
+        self.clean_all_btn.setFixedHeight(44)
+        self.clean_all_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.clean_all_btn.setToolTip("Clear the Dashboard. Stored mails are kept (Mails and Graph pages).")
+        self.clean_all_btn.setEnabled(False)
+        self.clean_all_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(244, 63, 94, 0.12); color: #fb7185;
+                border: 1px solid #f43f5e; border-radius: 6px;
+                font-weight: 700; font-size: 12px; padding: 0 18px;
+            }
+            QPushButton:hover { background: #f43f5e; color: #0a0e17; }
+            QPushButton:disabled { background: transparent; color: #475569; border-color: #334155; }
+        """)
+        self.clean_all_btn.clicked.connect(self.clean_dashboard)
+        btn_row.addWidget(self.clean_all_btn)
 
         # "Add to Case" button — hidden until a scan completes
         self.add_to_case_btn = QPushButton("📁 Add Scan Results to Case")
@@ -702,132 +737,183 @@ class DashboardWindow(QMainWindow):
     # DASH PAGE DATA LOGIC & CONTROLLER
     # =========================================================================
     def _clear_dash_to_empty_state(self) -> None:
-        """Reset the Dash page to an empty state (no data shown)."""
+        """Reset the Dash page to an empty state (nothing loaded)."""
         self.ioc_table.setRowCount(0)
         self._scored_iocs_cache = []
-        self.record_count_label.setText("No data — select an .eml folder to begin analysis")
-        for key, default in [("total_emails", "0"), ("unique_iocs", "0"),
-                             ("high_risk", "0"), ("active_cases", "0")]:
-            if key in self.kpi_cards:
-                self.kpi_cards[key].setText(default)
+        self.record_count_label.setText("No data - select an .eml folder to begin analysis")
+        self.load_info_label.setText(NOTHING_LOADED_TEXT)
+        self.load_info_label.setToolTip("")
+        for key in ("total_emails", "unique_iocs", "high_risk"):
+            self.kpi_cards[key].setText("0")
+        self.clean_all_btn.setEnabled(False)
+        self.add_to_case_btn.setVisible(False)
+        self._show_mail_placeholder()
+
+    # ------------------------------------------------------------------
+    # Current load: show / clean / remove one indicator
+    # ------------------------------------------------------------------
+    def show_load(self, load_id: int | None) -> None:
+        """Show one folder load on the Dashboard (``None`` = empty Dashboard)."""
+        self.current_load_id = load_id
+        self._hidden_ioc_ids = set()
+        self._load_score_cache = None
+        self.load_dash_data()
+
+    def clean_dashboard(self) -> None:
+        """"Clean All": empty the Dashboard. The mails stay stored in the database."""
+        had_load = self.current_load_id is not None
+        self.show_load(None)
+        if had_load:
+            self.statusBar().showMessage(
+                "Dashboard cleared. The mails are still stored (Mails and Graph pages).", 6000)
+
+    def remove_ioc_from_load(self, ioc_id: int, value: str = "") -> None:
+        """Right-click "Delete": hide one indicator from this load (it stays in the database)."""
+        if self.current_load_id is None:
+            return
+        self._hidden_ioc_ids.add(int(ioc_id))
+        self.load_dash_data()
+        self._show_mail_placeholder()
+        self.statusBar().showMessage(
+            f"Removed {value or 'the indicator'} from this load (still stored in the database).", 6000)
+
+    def restore_removed_iocs(self) -> None:
+        count = len(self._hidden_ioc_ids)
+        self._hidden_ioc_ids = set()
+        self.load_dash_data()
+        self.statusBar().showMessage(f"{count} removed indicator(s) shown again.", 4000)
+
+    def delete_selected_ioc(self) -> None:
+        """Delete key on the table = "Delete from this load" for the selected row."""
+        model = self.ioc_table.selectionModel()
+        rows = model.selectedRows() if model else []
+        if rows:
+            data = self.ioc_table.item(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+            if data:
+                self.remove_ioc_from_load(data["id"], data["value"])
+
+    def _load_scores(self, db: Database) -> dict[int, dict[str, Any]]:
+        """Score every indicator of the current load once (cached until the load changes)."""
+        if self._load_score_cache is None:
+            cache: dict[int, dict[str, Any]] = {}
+            for row in db.get_load_iocs(self.current_load_id):
+                enrichments = db.get_enrichments_for_ioc(row["id"])
+                result = self.scorer.score_ioc(
+                    ioc_type=row["type"], ioc_value=row["value"],
+                    enrichment_results=enrichments, frequency=int(row["load_frequency"] or 1),
+                )
+                cache[int(row["id"])] = {
+                    "score": result.score, "breakdown": result.breakdown,
+                    "behaviour_tags": result.behaviour_tags, "enrichments": enrichments,
+                }
+            self._load_score_cache = cache
+        return self._load_score_cache
+
+    @staticmethod
+    def _load_description(load: dict[str, Any], emails: int) -> str:
+        try:
+            when = datetime.fromisoformat(load["started_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        except (TypeError, ValueError):
+            when = str(load.get("started_at", ""))[:16]
+        folder = Path(str(load.get("folder") or "?")).name or str(load.get("folder"))
+        text = (f"Loaded {when}  -  {emails:,} mail(s) from {folder}  "
+                f"({load.get('emails_new', 0)} new, {load.get('emails_duplicate', 0)} already stored)")
+        if load.get("cancelled"):
+            text += "  -  scan was cancelled"
+        return text
 
     def load_dash_data(self) -> None:
-        """Load KPI cards and IOC table data directly from SQLite.
-
-        If the database has no emails yet (i.e. no scan has been run),
-        the table is left empty so the user is prompted to select a folder.
-        """
+        """Fill the table and counters from the current load only (nothing loaded = empty)."""
         db = self.get_db()
         try:
-            # 1. Check if any scan has been run
-            email_count = db.get_email_count()
-            if email_count == 0:
-                # Nothing scanned yet — keep dashboard in empty state
+            self.kpi_cards["active_cases"].setText(str(db.get_case_stats().get("open", 0)))
+            load = db.get_load(self.current_load_id) if self.current_load_id is not None else None
+            if load is None:
+                self.current_load_id = None
                 self._clear_dash_to_empty_state()
                 return
 
-            ioc_count = db.get_ioc_count()
-            case_stats = db.get_case_stats()
-
-            # 2. Get IOCs matching filter
+            scores = self._load_scores(db)
             raw_type = self.type_filter.currentText()
             type_filter = "" if raw_type == "All Types" else raw_type.lower().replace(" ", "_")
-            search_query = self.search_bar.text().strip()
+            # "All Types" leaves URLs out of the table (they have their own filter)
+            filters: dict[str, Any] = {
+                "ioc_type": type_filter,
+                "search": self.search_bar.text(),
+                "exclude_types": ["url"] if not type_filter else None,
+                "exclude_ids": self._hidden_ioc_ids,
+            }
+            rows = db.get_load_iocs(self.current_load_id, limit=DASH_TABLE_LIMIT, **filters)
+            matching = len(db.get_load_iocs(self.current_load_id, **filters))
+            self.populate_ioc_table(rows, scores)
 
-            # When showing all types, exclude URLs — only show IPs and Domains
-            exclude = ["url"] if not type_filter else None
-            iocs = db.get_filtered_iocs(
-                ioc_type=type_filter,
-                search=search_query,
-                limit=300,
-                exclude_types=exclude,
-            )
-            self.populate_ioc_table(iocs, db)
+            visible = [i for i in scores if i not in self._hidden_ioc_ids]
+            emails = db.get_load_email_count(self.current_load_id)
+            self.kpi_cards["total_emails"].setText(f"{emails:,}")
+            self.kpi_cards["unique_iocs"].setText(f"{len(visible):,}")
+            self.kpi_cards["high_risk"].setText(f"{sum(1 for i in visible if scores[i]['score'] >= 50):,}")
 
-            # High risk count estimation (from loaded items or sample)
-            high_risk_count = sum(1 for ioc in getattr(self, "_scored_iocs_cache", []) if ioc["score"] >= 50)
-
-            if "total_emails" in self.kpi_cards:
-                self.kpi_cards["total_emails"].setText(f"{email_count:,}")
-            if "unique_iocs" in self.kpi_cards:
-                self.kpi_cards["unique_iocs"].setText(f"{ioc_count:,}")
-            if "high_risk" in self.kpi_cards:
-                self.kpi_cards["high_risk"].setText(f"{high_risk_count:,}")
-            if "active_cases" in self.kpi_cards:
-                self.kpi_cards["active_cases"].setText(str(case_stats.get("open", 0)))
-
+            label = f"Showing {len(rows):,} of {matching:,} IOCs in this load"
+            if not type_filter:
+                label += " (URLs: pick the URL filter)"
+            if self._hidden_ioc_ids:
+                label += f"  ({len(self._hidden_ioc_ids)} removed)"
+            self.record_count_label.setText(label)
+            self.load_info_label.setText(self._load_description(load, emails))
+            self.load_info_label.setToolTip(str(load.get("folder") or ""))
+            self.clean_all_btn.setEnabled(True)
+            self.add_to_case_btn.setVisible(emails > 0)
         finally:
             db.close()
 
-    def populate_ioc_table(self, iocs: list[dict[str, Any]], db: Database) -> None:
-        """Populate the IOC table and score each indicator."""
+    def populate_ioc_table(self, iocs: list[dict[str, Any]], scores: dict[int, dict[str, Any]]) -> None:
+        """Fill the indicator table (scores come from :meth:`_load_scores`)."""
         self.ioc_table.setRowCount(len(iocs))
         self._scored_iocs_cache = []
 
         for row_idx, ioc in enumerate(iocs):
-            ioc_id = ioc["id"]
-            ioc_type = ioc["type"]
-            ioc_val = ioc["value"]
-            freq = ioc.get("frequency", 1)
+            info = scores.get(int(ioc["id"])) or {"score": 0.0, "breakdown": [], "behaviour_tags": [],
+                                                  "enrichments": []}
+            freq = int(ioc.get("load_frequency") or ioc.get("frequency") or 1)
             last_seen = str(ioc.get("last_seen", ""))[:19]
-
-            # Fetch cached enrichment results for accurate scoring
-            enrichments = db.get_enrichments_for_ioc(ioc_id)
-            score_res = self.scorer.score_ioc(
-                ioc_type=ioc_type,
-                ioc_value=ioc_val,
-                enrichment_results=enrichments,
-                frequency=freq,
-            )
-            severity = severity_from_score(score_res.score)
-
+            score = float(info["score"])
             cached_item = {
-                "id": ioc_id,
-                "type": ioc_type,
-                "value": ioc_val,
-                "frequency": freq,
-                "last_seen": last_seen,
-                "score": score_res.score,
-                "breakdown": score_res.breakdown,
-                "behaviour_tags": score_res.behaviour_tags,
-                "enrichments": enrichments,
+                "id": ioc["id"], "type": ioc["type"], "value": ioc["value"],
+                "frequency": freq, "last_seen": last_seen, "score": score,
+                "breakdown": info["breakdown"], "behaviour_tags": info["behaviour_tags"],
+                "enrichments": info["enrichments"],
             }
             self._scored_iocs_cache.append(cached_item)
 
-            # Col 0: Indicator Value (Monospace)
-            val_item = QTableWidgetItem(ioc_val)
+            val_item = QTableWidgetItem(ioc["value"])
             val_item.setFont(QFont("Consolas", 10))
+            val_item.setToolTip(ioc["value"])
             val_item.setData(Qt.ItemDataRole.UserRole, cached_item)
             self.ioc_table.setItem(row_idx, 0, val_item)
 
-            # Col 1: Type
-            type_item = QTableWidgetItem(ioc_type)
+            type_item = QTableWidgetItem(ioc["type"])
             type_item.setFont(QFont("Segoe UI", 9))
             type_item.setForeground(QColor("#94a3b8"))
             self.ioc_table.setItem(row_idx, 1, type_item)
 
-            # Col 2: Severity Badge
             badge_widget = QWidget()
             bw_layout = QHBoxLayout(badge_widget)
             bw_layout.setContentsMargins(4, 2, 4, 2)
             bw_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            bw_layout.addWidget(RiskBadge(severity))
+            bw_layout.addWidget(RiskBadge(severity_from_score(score)))
             self.ioc_table.setCellWidget(row_idx, 2, badge_widget)
 
-            # Col 3: Score
-            score_item = QTableWidgetItem(f"{score_res.score:.0f}/100")
+            score_item = QTableWidgetItem(f"{score:.0f}/100")
             score_item.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
-            score_color = "#ef4444" if score_res.score >= 50 else ("#eab308" if score_res.score >= 25 else "#10b981")
-            score_item.setForeground(QColor(score_color))
+            score_item.setForeground(QColor("#ef4444" if score >= 50 else ("#eab308" if score >= 25 else "#10b981")))
             self.ioc_table.setItem(row_idx, 3, score_item)
 
-            # Col 4: Frequency
             freq_item = QTableWidgetItem(f"{freq}×")
             freq_item.setFont(QFont("Consolas", 9))
             freq_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            freq_item.setToolTip(f"Found in {freq} mail(s) of this load")
             self.ioc_table.setItem(row_idx, 4, freq_item)
 
-            # Col 5: Last Seen
             seen_item = QTableWidgetItem(last_seen.replace("T", " "))
             seen_item.setFont(QFont("Segoe UI", 9))
             seen_item.setForeground(QColor("#64748b"))
@@ -835,237 +921,228 @@ class DashboardWindow(QMainWindow):
 
             self.ioc_table.setRowHeight(row_idx, 38)
 
-        total_in_db = db.get_ioc_count()
-        self.record_count_label.setText(f"Showing {len(iocs):,} of {total_in_db:,} IOCs")
-
     def on_ioc_filter_changed(self) -> None:
         """Trigger reload of the IOC table on filter or search edit."""
         self.load_dash_data()
 
+    # ------------------------------------------------------------------
+    # Right side: the mail an indicator came from
+    # ------------------------------------------------------------------
     def on_ioc_table_selection_changed(self) -> None:
-        """Update the details drawer when an IOC row is selected."""
-        selected_rows = self.ioc_table.selectedItems()
-        if not selected_rows:
+        """Clicking an indicator opens the mail(s) of this load that contain it."""
+        model = self.ioc_table.selectionModel()
+        rows = model.selectedRows() if model else []
+        if not rows:
             return
+        item = self.ioc_table.item(rows[0].row(), 0)
+        data = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if data:
+            self.show_mails_for_ioc(data)
 
-        row = selected_rows[0].row()
-        item = self.ioc_table.item(row, 0)
-        if not item:
-            return
-
-        ioc_data = item.data(Qt.ItemDataRole.UserRole)
-        if ioc_data:
-            self.populate_ioc_drawer(ioc_data)
-
-    def populate_ioc_drawer(self, ioc: dict[str, Any]) -> None:
-        """Fill the right-side drawer with complete explainability breakdown and intel."""
-        # Clear previous drawer contents
+    def _clear_mail_view(self) -> None:
         while self.drawer_content_layout.count():
             child = self.drawer_content_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+            elif child.layout():
+                self._delete_layout(child.layout())
 
-        ioc_id = ioc["id"]
-        ioc_val = ioc["value"]
-        ioc_type = ioc["type"]
-        freq = ioc["frequency"]
-        score = ioc["score"]
-        breakdown = ioc["breakdown"]
-        enrichments = ioc["enrichments"]
-        defanged_val = defang(ioc_val, ioc_type)
+    def _delete_layout(self, layout: Any) -> None:
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+            elif child.layout():
+                self._delete_layout(child.layout())
 
-        # 1. Header Box
-        header_card = QFrame()
-        header_card.setObjectName("metricCard")
-        hc_layout = QVBoxLayout(header_card)
-        hc_layout.setContentsMargins(12, 10, 12, 10)
-        hc_layout.setSpacing(6)
+    def _show_mail_placeholder(self) -> None:
+        self._clear_mail_view()
+        self.drawer_empty_label = QLabel(MAIL_VIEW_HINT)
+        self.drawer_empty_label.setStyleSheet("color: #64748b; font-size: 12px; line-height: 1.4;")
+        self.drawer_empty_label.setWordWrap(True)
+        self.drawer_content_layout.addWidget(self.drawer_empty_label)
+        self.drawer_content_layout.addStretch()
 
-        val_title = QLabel(ioc_val)
-        val_title.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
-        val_title.setStyleSheet("color: #00f0ff;")
-        val_title.setWordWrap(True)
-        hc_layout.addWidget(val_title)
+    def _mail_label(self, text: str, style: str = "color: #cbd5e1; font-size: 12px;") -> QLabel:
+        """Plain-text, selectable, wrapping label (mail content is attacker-controlled)."""
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setStyleSheet(style)
+        # a long unbroken value (Message-ID, hash, path) must not widen the panel
+        label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        label.setMinimumWidth(0)
+        label.setToolTip(text if len(text) > 40 else "")
+        return label
 
-        meta_label = QLabel(f"Defanged: {defanged_val}\nType: {ioc_type.upper()}  •  Seen: {freq} times in corpus")
-        meta_label.setStyleSheet("color: #94a3b8; font-size: 11px; font-family: 'Consolas';")
-        hc_layout.addWidget(meta_label)
+    def _mail_heading(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 800; margin-top: 6px;")
+        return label
 
-        # Quick Actions Row
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
+    def _plain_table(self, headers: list[str], rows: list[tuple[str, ...]], max_height: int = 240) -> QTableWidget:
+        """Read-only table of plain-text cells (long values are shortened in the middle)."""
+        table = QTableWidget(len(rows), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        for r, row in enumerate(rows):
+            for c, text in enumerate(row):
+                cell = QTableWidgetItem(text)
+                cell.setToolTip(text)
+                table.setItem(r, c, cell)
+        hdr = table.horizontalHeader()
+        for c in range(len(headers)):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(len(headers) - 1 if len(headers) < 3 else 1, QHeaderView.ResizeMode.Stretch)
+        table.setMinimumHeight(min(max_height, 34 + 28 * max(1, len(rows))))
+        table.setMaximumHeight(max_height)
+        return table
 
-        copy_btn = QPushButton("📋 Copy Defanged")
-        copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        copy_btn.setStyleSheet("""
-            QPushButton {
-                background: #1e2432; color: #38bdf8; border: 1px solid #2d3748;
-                border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 600;
-            }
-            QPushButton:hover { background: #283144; color: #ffffff; }
-        """)
-        copy_btn.clicked.connect(lambda: self.copy_defanged_ioc(ioc_val, ioc_type))
-        action_row.addWidget(copy_btn)
+    def show_mails_for_ioc(self, ioc: dict[str, Any]) -> None:
+        """Right side: the mail(s) of the current load that contain *ioc*."""
+        if self.current_load_id is None:
+            return
+        db = self.get_db()
+        try:
+            mails = db.get_load_emails_for_ioc(self.current_load_id, int(ioc["id"]))
+        finally:
+            db.close()
+        self._mail_view_ioc = ioc
+        self._mail_view_mails = mails
+        self._clear_mail_view()
 
-        reenrich_btn = QPushButton("🔄 Re-enrich")
-        reenrich_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        reenrich_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(0, 240, 255, 0.15); color: #00f0ff; border: 1px solid #00f0ff;
-                border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 700;
-            }
-            QPushButton:hover { background: #00f0ff; color: #0a0e17; }
-        """)
-        reenrich_btn.clicked.connect(lambda: self.re_enrich_ioc(ioc_id, ioc_type, ioc_val, freq))
-        action_row.addWidget(reenrich_btn)
+        self.drawer_content_layout.addWidget(self._mail_label(
+            f"{ioc['type'].upper()}   {ioc['value']}",
+            "color: #00f0ff; font-size: 13px; font-weight: 700; font-family: Consolas, monospace;"))
+        if not mails:
+            self.drawer_content_layout.addWidget(self._mail_label("No mail of this load contains this indicator."))
+            self.drawer_content_layout.addStretch()
+            return
+        self.drawer_content_layout.addWidget(self._mail_heading(
+            f"FOUND IN {len(mails)} MAIL(S) OF THIS LOAD" + ("  -  pick one:" if len(mails) > 1 else "")))
+        self.mail_selector = QComboBox()
+        self.mail_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.mail_selector.setMinimumContentsLength(12)
+        for i, mail in enumerate(mails, start=1):
+            self.mail_selector.addItem(f"{i}.  {(mail.get('subject') or mail.get('filename') or '(no subject)')[:70]}")
+        self.mail_selector.setVisible(len(mails) > 1)
+        self.mail_selector.currentIndexChanged.connect(lambda i: self._render_mail(self._mail_view_mails[i]))
+        self.drawer_content_layout.addWidget(self.mail_selector)
 
-        hc_layout.addLayout(action_row)
-        self.drawer_content_layout.addWidget(header_card)
+        self.mail_body_widget = QWidget()
+        self.mail_body_layout = QVBoxLayout(self.mail_body_widget)
+        self.mail_body_layout.setContentsMargins(0, 0, 0, 0)
+        self.mail_body_layout.setSpacing(8)
+        self.drawer_content_layout.addWidget(self.mail_body_widget)
+        self.drawer_content_layout.addStretch()
+        self._render_mail(mails[0])
 
-        # 2. Risk Score & Explainability Breakdown Card
-        score_card = QFrame()
-        score_card.setObjectName("metricCard")
-        sc_layout = QVBoxLayout(score_card)
-        sc_layout.setContentsMargins(12, 12, 12, 12)
-        sc_layout.setSpacing(8)
+    def _render_mail(self, mail: dict[str, Any]) -> None:
+        """Full view of one stored mail (all text shown as plain text)."""
+        self._delete_layout(self.mail_body_layout)
+        add = self.mail_body_layout.addWidget
 
-        sc_top = QHBoxLayout()
-        sc_lbl = QLabel(f"RISK SCORE: {score:.0f}/100")
-        sc_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        sc_color = "#ef4444" if score >= 50 else ("#eab308" if score >= 25 else "#10b981")
-        sc_lbl.setStyleSheet(f"color: {sc_color};")
-        sc_top.addWidget(sc_lbl)
-        sc_top.addStretch()
-        sc_top.addWidget(RiskBadge(severity_from_score(score)))
-        sc_layout.addLayout(sc_top)
+        def loads(value: Any, default: Any) -> Any:
+            try:
+                parsed = json.loads(value or "null")
+            except (TypeError, ValueError):
+                return default
+            return parsed if isinstance(parsed, type(default)) else default
 
-        # Breakdown List
-        factors_title = QLabel("SCORE BREAKDOWN (EXPLAINABILITY)")
-        factors_title.setObjectName("metricSubTitle")
-        sc_layout.addWidget(factors_title)
-
-        if breakdown:
-            for factor in breakdown:
-                fb_box = QFrame()
-                fb_box.setStyleSheet("background-color: #12141c; border-radius: 5px; padding: 6px;")
-                fb_lay = QVBoxLayout(fb_box)
-                fb_lay.setContentsMargins(8, 6, 8, 6)
-                fb_lay.setSpacing(2)
-
-                row = QHBoxLayout()
-                fname = QLabel(factor.factor.upper().replace("_", " "))
-                fname.setStyleSheet("color: #f1f5f9; font-weight: 700; font-size: 11px;")
-                fpts = QLabel(f"+{factor.points:.1f} pts")
-                fpts.setStyleSheet(f"color: {sc_color}; font-weight: 800; font-size: 11px;")
-                row.addWidget(fname)
-                row.addStretch()
-                row.addWidget(fpts)
-                fb_lay.addLayout(row)
-
-                freason = QLabel(factor.reason)
-                freason.setStyleSheet("color: #94a3b8; font-size: 11px;")
-                freason.setWordWrap(True)
-                fb_lay.addWidget(freason)
-
-                sc_layout.addWidget(fb_box)
-        else:
-            no_factor = QLabel("No threat penalties applied. Clean indicator.")
-            no_factor.setStyleSheet("color: #10b981; font-size: 11px;")
-            sc_layout.addWidget(no_factor)
-
-        self.drawer_content_layout.addWidget(score_card)
-
-        # 3. Enrichment Results Card
-        enrich_card = QFrame()
-        enrich_card.setObjectName("metricCard")
-        ec_layout = QVBoxLayout(enrich_card)
-        ec_layout.setContentsMargins(12, 12, 12, 12)
-        ec_layout.setSpacing(8)
-
-        ec_title = QLabel("THREAT INTEL FEEDS (CACHED / LIVE)")
-        ec_title.setObjectName("metricSubTitle")
-        ec_layout.addWidget(ec_title)
-
-        if enrichments:
-            for enr in enrichments:
-                provider = enr.get("provider", "unknown").upper()
-                verdict = enr.get("verdict", "unknown")
-                enr_score = enr.get("score")
-                fetched = str(enr.get("fetched_at", ""))[:19]
-
-                eb_box = QFrame()
-                eb_box.setStyleSheet("background-color: #12141c; border-radius: 5px; padding: 6px;")
-                eb_lay = QVBoxLayout(eb_box)
-                eb_lay.setContentsMargins(8, 6, 8, 6)
-                eb_lay.setSpacing(4)
-
-                top_row = QHBoxLayout()
-                p_lbl = QLabel(provider)
-                p_lbl.setStyleSheet("font-weight: 700; font-size: 11px; color: #38bdf8;")
-                v_lbl = QLabel(verdict.upper())
-                v_col = "#ef4444" if verdict == "malicious" else ("#eab308" if verdict == "suspicious" else "#10b981")
-                v_lbl.setStyleSheet(f"font-weight: 800; font-size: 10px; color: {v_col};")
-                top_row.addWidget(p_lbl)
-                top_row.addStretch()
-                top_row.addWidget(v_lbl)
-                eb_lay.addLayout(top_row)
-
-                details = f"Score: {enr_score if enr_score is not None else 'N/A'}  •  Fetched: {fetched}"
-                d_lbl = QLabel(details)
-                d_lbl.setStyleSheet("color: #64748b; font-size: 10px;")
-                eb_lay.addWidget(d_lbl)
-
-                ec_layout.addWidget(eb_box)
-        else:
-            no_enr = QLabel("No threat intelligence cached in DB for this indicator.")
-            no_enr.setStyleSheet("color: #64748b; font-size: 11px;")
-            ec_layout.addWidget(no_enr)
-
-            enr_now_btn = QPushButton("⚡ Run Live Enrichment")
-            enr_now_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            enr_now_btn.setStyleSheet("""
-                QPushButton {
-                    background: #1e2432; color: #00f0ff; border: 1px solid #00f0ff;
-                    border-radius: 5px; padding: 5px; font-weight: 700; font-size: 11px;
-                }
-                QPushButton:hover { background: #00f0ff; color: #0a0e17; }
-            """)
-            enr_now_btn.clicked.connect(lambda: self.re_enrich_ioc(ioc_id, ioc_type, ioc_val, freq))
-            ec_layout.addWidget(enr_now_btn)
-
-        self.drawer_content_layout.addWidget(enrich_card)
-
-        # 4. Associated Emails Card
-        email_card = QFrame()
-        email_card.setObjectName("metricCard")
-        emc_layout = QVBoxLayout(email_card)
-        emc_layout.setContentsMargins(12, 12, 12, 12)
-        emc_layout.setSpacing(6)
-
-        emc_title = QLabel("ASSOCIATED EVIDENCE EMAILS")
-        emc_title.setObjectName("metricSubTitle")
-        emc_layout.addWidget(emc_title)
+        headers = loads(mail.get("headers_json"), {})
+        auth = loads(mail.get("auth_json"), {})
+        hops = loads(mail.get("received_json"), [])
 
         db = self.get_db()
         try:
-            linked_emails = db.get_emails_for_ioc(ioc_id, limit=5)
-            if linked_emails:
-                for em in linked_emails:
-                    fn = em.get("filename", "")
-                    ctx = em.get("context", "")
-                    lbl = QLabel(f"• {fn} ({ctx})")
-                    lbl.setStyleSheet("color: #cbd5e1; font-size: 11px; font-family: 'Consolas';")
-                    lbl.setWordWrap(True)
-                    emc_layout.addWidget(lbl)
-            else:
-                lbl = QLabel("No linked email files recorded.")
-                lbl.setStyleSheet("color: #64748b; font-size: 11px;")
-                emc_layout.addWidget(lbl)
+            iocs = db.get_iocs_for_email(int(mail["id"]))
+            attachments = db.get_attachments_for_email(int(mail["id"]))
+            enrichments = {int(i["id"]): db.get_enrichments_for_ioc(int(i["id"])) for i in iocs}
         finally:
             db.close()
+        result = score_stored_email(self.scorer, mail, iocs, attachments, enrichments)
 
-        self.drawer_content_layout.addWidget(email_card)
-        self.drawer_content_layout.addStretch()
+        add(self._mail_label(mail.get("subject") or headers.get("subject") or "(no subject)",
+                             "color: #f1f5f9; font-size: 15px; font-weight: 800;"))
+        verdict = QHBoxLayout()
+        verdict.addWidget(RiskBadge(severity_from_score(result.score)))
+        verdict.addWidget(self._mail_label(f"Mail risk score {result.score:.0f}/100",
+                                           "color: #e2e8f0; font-size: 12px; font-weight: 700;"), 1)
+        self.mail_body_layout.addLayout(verdict)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(4)
+        def short_list(value: str, keep: int = 8) -> str:
+            parts = [p.strip() for p in str(value).split(",") if p.strip()]
+            return value if len(parts) <= keep else ", ".join(parts[:keep]) + f"  ... and {len(parts) - keep} more"
+
+        for name, value in (
+            ("From", headers.get("from_addr") or mail.get("from_addr", "")),
+            ("To", short_list(headers.get("to", ""))),
+            ("Cc", short_list(headers.get("cc", ""))),
+            ("Reply-To", headers.get("reply_to", "")),
+            ("Return-Path", headers.get("return_path", "")),
+            ("Date", headers.get("date", "")),
+            ("Message-ID", headers.get("message_id", "")),
+            ("File", mail.get("filepath") or mail.get("filename", "")),
+            ("SHA-256", mail.get("file_sha256", "")),
+        ):
+            if value:
+                form.addRow(self._mail_heading(name), self._mail_label(str(value)))
+        self.mail_body_layout.addLayout(form)
+
+        flags = describe_flags(mail)
+        if flags:
+            add(self._mail_heading("WARNING FLAGS"))
+            add(self._mail_label("; ".join(flags), "color: #f59e0b; font-size: 12px;"))
+
+        add(self._mail_heading("WHY THIS SCORE"))
+        add(self._mail_label("\n".join(f"+{f.points:.1f}  {f.factor}: {f.reason}" for f in result.breakdown)
+                             or "No risk factors found for this mail."))
+
+        add(self._mail_heading("AUTHENTICATION"))
+        add(self._mail_label("    ".join(f"{k.upper()}: {auth.get(k, 'none')}" for k in ("spf", "dkim", "dmarc"))))
+
+        if hops:
+            add(self._mail_heading(f"RECEIVED CHAIN ({len(hops)} hops, newest first)"))
+            add(self._plain_table(["#", "From host", "IP", "External"], [
+                (str(i), str(h.get("from_host") or ""), str(h.get("from_ip") or ""),
+                 "yes" if h.get("is_external") else "no")
+                for i, h in enumerate(hops, start=1)]))
+
+        add(self._mail_heading(f"INDICATORS IN THIS MAIL ({len(iocs)})"))
+        ioc_table = self._plain_table(["Type", "Value", "Where"], [
+            (str(i["type"]), str(i["value"]), str(i.get("context") or "")) for i in iocs])
+        selected_id = int(getattr(self, "_mail_view_ioc", {}).get("id", -1))
+        for r, i in enumerate(iocs):
+            if int(i["id"]) == selected_id:
+                ioc_table.selectRow(r)
+                break
+        add(ioc_table)
+
+        if attachments:
+            add(self._mail_heading(f"ATTACHMENTS ({len(attachments)})"))
+            add(self._plain_table(["Name", "Type", "Size", "SHA-256"], [
+                (str(a["filename"]), str(a["mime_type"]), f"{int(a['size']):,} B", str(a["sha256"]))
+                for a in attachments]))
+
+        add(self._mail_heading("BODY (plain text)"))
+        body = QPlainTextEdit()
+        body.setReadOnly(True)
+        body.setMinimumHeight(240)
+        body.setPlainText(mail.get("body_text") or
+                          "(No body text stored - this mail was loaded with an older version. "
+                          "Scan its folder again to store it.)")
+        add(body)
 
     # =========================================================================
     # CONTEXT MENU & DEFANG / RE-ENRICH ACTIONS
@@ -1095,6 +1172,10 @@ class DashboardWindow(QMainWindow):
         reenrich_act = menu.addAction("🔄 Re-enrich Indicator")
         menu.addSeparator()
         link_case_act = menu.addAction("📁 Add to Investigation Case...")
+        menu.addSeparator()
+        remove_act = menu.addAction("🗑 Delete from this load   (Del)")
+        restore_act = (menu.addAction(f"↺ Show removed indicators again ({len(self._hidden_ioc_ids)})")
+                       if self._hidden_ioc_ids else None)
 
         action = menu.exec(self.ioc_table.viewport().mapToGlobal(pos))
         if action == copy_defanged_act:
@@ -1105,6 +1186,10 @@ class DashboardWindow(QMainWindow):
             self.re_enrich_ioc(ioc_id, ioc_type, ioc_val, freq)
         elif action == link_case_act:
             self.add_ioc_to_case_prompt(ioc_id, ioc_val)
+        elif action == remove_act:
+            self.remove_ioc_from_load(ioc_id, ioc_val)
+        elif restore_act is not None and action == restore_act:
+            self.restore_removed_iocs()
 
     def copy_defanged_ioc(self, val: str, ioc_type: str) -> None:
         """Copy defanged IOC representation to the system clipboard."""
@@ -1139,9 +1224,9 @@ class DashboardWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"✓ Re-enrichment complete for {val} — new score: {result['score']:.0f}/100", 6000
             )
-            # Reload dash table and drawer
+            # Scores may have changed: re-score the load and redraw the table
+            self._load_score_cache = None
             self.load_dash_data()
-            self.populate_ioc_drawer(result)
             if worker in self._enrich_workers:
                 self._enrich_workers.remove(worker)
 
@@ -1193,7 +1278,7 @@ class DashboardWindow(QMainWindow):
             db.close()
 
     def handle_add_scan_to_case(self) -> None:
-        """Link all emails currently in the DB to a chosen case (called from Dash page)."""
+        """Link the mails of the current load to a chosen case (called from Dash page)."""
         from PyQt6.QtWidgets import QInputDialog
         db = self.get_db()
         try:
@@ -1213,15 +1298,15 @@ class DashboardWindow(QMainWindow):
             case_titles = [f"#{c['id']}: {c['title']} ({c['status']})" for c in cases]
             chosen, ok = QInputDialog.getItem(
                 self, "Add Scan Results to Case",
-                "Link all scanned emails to which case?",
+                "Link the loaded emails to which case?",
                 case_titles, 0, False,
             )
             if ok and chosen:
                 case_id = int(chosen.split(":")[0].replace("#", ""))
-                emails = db.get_all_emails()
+                email_ids = db.get_load_email_ids(self.current_load_id) if self.current_load_id else []
                 linked = 0
-                for email in emails:
-                    db.add_email_to_case(case_id, email["id"])
+                for email_id in email_ids:
+                    db.add_email_to_case(case_id, email_id)
                     linked += 1
                 db.batch_commit()
                 self.statusBar().showMessage(
@@ -3271,7 +3356,7 @@ class DashboardWindow(QMainWindow):
     def hide_scan_progress(self, result: dict | None = None) -> None:
         self.progress_frame.setVisible(False)
         self.analyze_button.setEnabled(True)
-        self.analyze_button.setText("Select .eml Folder & Analyze")
+        self.analyze_button.setText("Select .eml Folder && Analyze")
 
         if result:
             scanned = result.get("emails_scanned", 0)
@@ -3293,7 +3378,10 @@ class DashboardWindow(QMainWindow):
             self.last_scan_problems_total = int(result.get("problems_total", len(self.last_scan_problems)))
             self.scan_issues_btn.setVisible(bool(self.last_scan_problems_total))
             self.scan_issues_btn.setText(f"⚠ {self.last_scan_problems_total} files not ingested")
+            # The Dashboard switches to the mails of this load only
+            load_id = result.get("load_id")
+            if load_id is not None:
+                self.current_load_id = int(load_id)
+                self._hidden_ioc_ids = set()
+                self._load_score_cache = None
             self.refresh_all_data()
-            # Show the "Add to Case" button after a successful scan
-            if not cancelled and new > 0:
-                self.add_to_case_btn.setVisible(True)

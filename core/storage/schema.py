@@ -17,7 +17,8 @@ from __future__ import annotations
 #: Current schema version, stored in ``PRAGMA user_version``.
 #:   1 - original tables
 #:   2 - mail content columns on ``emails`` + ``attachments`` table
-SCHEMA_VERSION: int = 2
+#:   3 - ``loads`` / ``load_emails``: one row per folder load and the mails in it
+SCHEMA_VERSION: int = 3
 
 #: Columns added to ``emails`` in version 2: name -> column definition.
 #: Used by :meth:`Database._migrate` to upgrade databases created by v1
@@ -135,4 +136,28 @@ CREATE TABLE IF NOT EXISTS case_emails (
     added_at   TEXT    NOT NULL,
     PRIMARY KEY (case_id, email_id)
 );
+
+-- -------------------------------------------------------------------------
+-- loads: one row per folder load (scan); load_emails: the mails it contained
+-- (new and already-stored ones).  The Dashboard shows one load at a time.
+-- -------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS loads (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder           TEXT    NOT NULL DEFAULT '',
+    started_at       TEXT    NOT NULL,
+    finished_at      TEXT    NOT NULL,
+    files_found      INTEGER NOT NULL DEFAULT 0,
+    emails_new       INTEGER NOT NULL DEFAULT 0,
+    emails_duplicate INTEGER NOT NULL DEFAULT 0,
+    files_skipped    INTEGER NOT NULL DEFAULT 0,
+    files_failed     INTEGER NOT NULL DEFAULT 0,
+    cancelled        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS load_emails (
+    load_id   INTEGER NOT NULL REFERENCES loads(id)  ON DELETE CASCADE,
+    email_id  INTEGER NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    PRIMARY KEY (load_id, email_id)
+);
+CREATE INDEX IF NOT EXISTS idx_load_emails_email ON load_emails(email_id);
 """

@@ -14,7 +14,7 @@ import pytest
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --no-sandbox"
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 
 from app.dashboard import DashboardWindow, RiskBadge, severity_from_score
 from core.parser.eml_parser import parse_eml_file
@@ -39,13 +39,16 @@ def test_db_path(tmp_path: Path) -> Path:
     db_file = tmp_path / "test_mailintel.db"
     db = Database(db_file)
 
-    # One stored email, so the dashboard treats the DB as "scanned"
-    db.upsert_email(parse_eml_file(_FIXTURES / "01_phishing_link.eml"))
+    # One stored email with three indicators, recorded as one folder load
+    eid = db.upsert_email(parse_eml_file(_FIXTURES / "01_phishing_link.eml"))
 
-    # Insert sample IOCs
     i1 = db.upsert_ioc("ipv4", "198.51.100.22")
-    db.upsert_ioc("domain", "paypal-secure-verify.com")
-    db.upsert_ioc("url", "http://evil.com/payload.exe")
+    i2 = db.upsert_ioc("domain", "paypal-secure-verify.com")
+    i3 = db.upsert_ioc("url", "http://evil.com/payload.exe")
+    for ioc_id in (i1, i2, i3):
+        db.link_email_ioc(eid, ioc_id, context="body")
+    load_id = db.create_load("fixtures", started_at="2026-11-23T10:00:00+00:00", emails_new=1)
+    db.add_emails_to_load(load_id, [eid])
 
     # Insert enrichment for i1
     db.upsert_enrichment(
@@ -72,9 +75,12 @@ def test_severity_from_score():
 
 
 def _loaded_window(db_path: Path) -> DashboardWindow:
-    """Open the dashboard and load data, as happens after a scan finishes."""
+    """Open the dashboard and show the latest load, as happens after a scan finishes."""
     window = DashboardWindow(db_path=db_path)
-    window.load_dash_data()
+    db = Database(db_path)
+    latest = db.get_loads()[0]["id"]
+    db.close()
+    window.show_load(latest)
     return window
 
 
@@ -110,23 +116,13 @@ def test_dashboard_type_filter(qapp, test_db_path):
     assert window.ioc_table.rowCount() == 2
 
 
-def test_ioc_details_drawer_breakdown(qapp, test_db_path):
+def test_clicking_an_ioc_opens_its_mail_on_the_right(qapp, test_db_path):
     window = _loaded_window(test_db_path)
-    # Select first row (198.51.100.22 with VT enrichment)
-    window.ioc_table.selectRow(0)
-
-    # Drawer should be populated with score breakdown & enrichments
-    assert window.drawer_content_layout.count() > 1
-    # Check that VT is mentioned in the drawer
-    found_vt = False
-    for i in range(window.drawer_content_layout.count()):
-        item = window.drawer_content_layout.itemAt(i)
-        if item and item.widget():
-            text = item.widget().findChildren(RiskBadge)
-            if text:
-                found_vt = True
-                break
-    assert found_vt
+    window.ioc_table.selectRow(0)                      # 198.51.100.22
+    texts = " | ".join(label.text() for label in window.drawer_content.findChildren(QLabel))
+    assert "Urgent Security Verification" in texts     # subject of the fixture mail
+    assert "WHY THIS SCORE" in texts and "AUTHENTICATION" in texts
+    assert window.drawer_content.findChildren(RiskBadge)      # mail verdict badge
 
 
 def test_copy_defanged_ioc(qapp, test_db_path):

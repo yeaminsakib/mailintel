@@ -7,7 +7,8 @@ Folder scanning shared by the GUI worker and the CLI.
 * ``scan_folder``        - parse + ingest each file and return a
   :class:`ScanReport` that says exactly what happened to every file: new,
   duplicate, skipped (empty / too large) or failed.  Nothing is dropped
-  silently.
+  silently.  Each scan that read at least one mail is recorded as a *load*
+  (``loads`` / ``load_emails``) so the Dashboard can show just that load.
 
 Safety limits: files larger than ``MAX_EML_BYTES`` are skipped *before* they
 are read, so a single huge file cannot exhaust memory.  Pure business logic:
@@ -19,6 +20,7 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,7 @@ class ScanReport:
     cancelled: bool = False
     email_ids: list[int] = field(default_factory=list)   # new + duplicate emails
     problems: list[FileProblem] = field(default_factory=list)
+    load_id: int | None = None   # the recorded load (None when no mail was read)
 
     @property
     def emails_read(self) -> int:
@@ -95,6 +98,7 @@ class ScanReport:
             "cancelled": self.cancelled,
             "problems": [p.to_dict() for p in self.problems[:max_problems]],
             "problems_total": len(self.problems),
+            "load_id": self.load_id,
         }
 
 
@@ -150,6 +154,7 @@ def scan_folder(
     leaves IOC frequencies unchanged.
     """
     report = ScanReport()
+    started_at = datetime.now(timezone.utc).isoformat()
     if files is None:
         files = discover_eml_files(folder, recursive=recursive, limit=limit, problems=report.problems)
     report.files_found = len(files)
@@ -185,6 +190,18 @@ def scan_folder(
         else:
             report.new_emails += 1
 
+    if report.email_ids:
+        report.load_id = db.create_load(
+            str(folder),
+            started_at=started_at,
+            files_found=report.files_found,
+            emails_new=report.new_emails,
+            emails_duplicate=report.duplicates,
+            files_skipped=report.skipped,
+            files_failed=report.failed,
+            cancelled=report.cancelled,
+        )
+        db.add_emails_to_load(report.load_id, report.email_ids)
     db.batch_commit()
     return report
 

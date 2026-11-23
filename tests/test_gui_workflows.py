@@ -102,15 +102,17 @@ def test_gui_search_filter(qapp, qtbot, empty_db):
     """Verify search input dynamically filters IOC table rows."""
     # Seed data
     db = Database(empty_db)
-    db.upsert_email(parse_eml_file(Path("tests/fixtures/01_phishing_link.eml").resolve()))
-    db.upsert_ioc("domain", "paypa1.com")
-    db.upsert_ioc("url", "http://evil-actor.net/landing")
-    db.upsert_ioc("ipv4", "89.160.20.156")
+    eid = db.upsert_email(parse_eml_file(Path("tests/fixtures/01_phishing_link.eml").resolve()))
+    for ioc_type, value in (("domain", "paypa1.com"), ("url", "http://evil-actor.net/landing"),
+                            ("ipv4", "89.160.20.156")):
+        db.link_email_ioc(eid, db.upsert_ioc(ioc_type, value), context="body")
+    load_id = db.create_load("fixtures", started_at="2026-11-23T10:00:00+00:00", emails_new=1)
+    db.add_emails_to_load(load_id, [eid])
     db.close()
 
     window = DashboardWindow(db_path=empty_db)
     qtbot.addWidget(window)
-    window.load_dash_data()  # as after a finished scan
+    window.show_load(load_id)  # as after a finished scan
     assert window.ioc_table.rowCount() == 2  # "All Types" hides URLs
 
     # Search for paypa1
