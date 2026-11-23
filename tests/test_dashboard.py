@@ -212,6 +212,8 @@ def test_graph_page_correlation_and_drawer(qapp, test_db_path):
 
     window = DashboardWindow(db_path=test_db_path)
     # Switch to Graph tab
+    # these checks are about the old entity-network view (no longer the default)
+    window.graph_view_combo.setCurrentIndex(window.graph_view_combo.findData("network"))
     window.select_nav_button(2)
 
     # Header stats label must show real active graph counts (not hardcoded static text)

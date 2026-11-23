@@ -74,7 +74,8 @@ flowchart TD
   - Direct mapping of observed email behaviours (e.g. `T1566.001`, `T1566.002`, `T1036`, `T1586.002`, `T1027.006`) using `data/mitre_map.yaml`.
 - **Campaign Clustering & Graph Visualization**:
   - Unsupervised clustering of related email attacks using shared IOCs, infrastructure, and TF-IDF subject cosine similarity.
-  - Interactive attack graph rendered with PyVis and NetworkX in PyQt6 WebEngine.
+  - **Mail-flow graph** (default Graph view): from each sending IP or sending domain to the recipient addresses it mailed, with the number of mails per recipient; Top 10–100 senders, or one sender at a time; click a node for the full recipient and mail list.
+  - Interactive attack graph rendered with PyVis and NetworkX in PyQt6 WebEngine (the "Full network" view).
 - **CTI Sharing & Reporting**:
   - **OASIS STIX 2.1**: Bundles with `Indicator`, `ObservedData`, SCOs, and `Relationship` objects.
   - **MISP 2.4 JSON**: Full event models with typed attributes (`ip-dst`, `domain`, `url`, `sha256`, `email-src`) and threat level categorizations.

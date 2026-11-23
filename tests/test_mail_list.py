@@ -301,6 +301,8 @@ class TestMailsPage:
     def test_graph_scores_use_stored_attachments_and_auth(self, seeded: Path, qtbot) -> None:
         window = DashboardWindow(db_path=seeded)
         qtbot.addWidget(window)
+        # these checks are about the old entity-network view (no longer the default)
+        window.graph_view_combo.setCurrentIndex(window.graph_view_combo.findData("network"))
         window.select_nav_button(2)
         graph = window.graph_builder.graph
         email_scores = {d["label"]: d["risk_score"] for _, d in graph.nodes(data=True) if d.get("entity_type") == "email"}

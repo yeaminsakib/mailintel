@@ -558,161 +558,171 @@ class ThreatGraphBuilder:
 
     def generate_html(self) -> str:
         """Generate self-contained HTML with dark styling and click handlers."""
-        net = self.to_pyvis_network()
-        html = net.generate_html()
+        return finalize_vis_html(self.to_pyvis_network().generate_html())
 
-        # Custom JS hook for Qt WebEngine: node selection is reported through
-        # console messages (picked up by app.graph_view.GraphPage), because the
-        # page is not allowed to navigate anywhere.
-        qt_hook = """
-        network.on("selectNode", function(params) {
-            if (params.nodes && params.nodes.length > 0) {
-                console.log("mailintel://node/" + encodeURIComponent(params.nodes[0]));
-            }
-        });
-        network.on("deselectNode", function(params) {
-            console.log("mailintel://deselect");
-        });
-        window.addEventListener("resize", function() {
-            if (network) {
-                network.redraw();
-                network.fit();
-            }
-        });
-        setTimeout(function() {
-            if (network) {
-                network.fit();
-            }
-        }, 250);
-        return network;
-        """
-        # Transform node string titles to HTML DOM Elements so vis-network renders rich formatted HTML
-        dom_tooltip_hook = """
-        try {
-            var rawNodes = nodes.get();
-            for (var i = 0; i < rawNodes.length; i++) {
-                var nd = rawNodes[i];
-                if (nd.title && typeof nd.title === "string") {
-                    var el = document.createElement("div");
-                    el.className = "mailintel-tooltip-inner";
-                    el.innerHTML = nd.title;
-                    nd.title = el;
-                }
-            }
-            nodes.update(rawNodes);
-        } catch(e) {
-            console.error("Error setting DOM tooltips", e);
+
+def finalize_vis_html(html: str) -> str:
+    """Turn raw pyvis HTML into the page shown in the app.
+
+    Adds the click bridge (node selection is reported as ``mailintel://`` console
+    messages, picked up by ``app.graph_view.GraphPage``, because the page may not
+    navigate), turns string tooltips into DOM elements, and applies the dark
+    styling.  A page may define ``window.mailintelFit()`` to replace the default
+    "fit everything" zoom (used on load and on resize).  Callers must escape every attacker-controlled string they put in
+    a node title or label.
+    """
+    # Custom JS hook for Qt WebEngine: node selection is reported through
+    # console messages (picked up by app.graph_view.GraphPage), because the
+    # page is not allowed to navigate anywhere.
+    qt_hook = """
+    network.on("selectNode", function(params) {
+        if (params.nodes && params.nodes.length > 0) {
+            console.log("mailintel://node/" + encodeURIComponent(params.nodes[0]));
         }
-        network = new vis.Network(container, data, options);
-        """
-        html = html.replace("network = new vis.Network(container, data, options);", dom_tooltip_hook)
-        html = html.replace("return network;", qt_hook)
-        html = html.replace("border: 1px solid lightgray;", "border: none;")
-        html = html.replace('<div class="card" style="width: 100%">', '<div class="card" style="width: 100%; height: 100%;">')
+    });
+    network.on("deselectNode", function(params) {
+        console.log("mailintel://deselect");
+    });
+    window.addEventListener("resize", function() {
+        if (network) {
+            network.redraw();
+            (window.mailintelFit ? window.mailintelFit() : network.fit());
+        }
+    });
+    setTimeout(function() {
+        if (network) {
+            (window.mailintelFit ? window.mailintelFit() : network.fit());
+        }
+    }, 250);
+    return network;
+    """
+    # Transform node string titles to HTML DOM Elements so vis-network renders rich formatted HTML
+    dom_tooltip_hook = """
+    try {
+        var rawNodes = nodes.get();
+        for (var i = 0; i < rawNodes.length; i++) {
+            var nd = rawNodes[i];
+            if (nd.title && typeof nd.title === "string") {
+                var el = document.createElement("div");
+                el.className = "mailintel-tooltip-inner";
+                el.innerHTML = nd.title;
+                nd.title = el;
+            }
+        }
+        nodes.update(rawNodes);
+    } catch(e) {
+        console.error("Error setting DOM tooltips", e);
+    }
+    network = new vis.Network(container, data, options);
+    """
+    html = html.replace("network = new vis.Network(container, data, options);", dom_tooltip_hook)
+    html = html.replace("return network;", qt_hook)
+    html = html.replace("border: 1px solid lightgray;", "border: none;")
+    html = html.replace('<div class="card" style="width: 100%">', '<div class="card" style="width: 100%; height: 100%;">')
 
-        # Inject dark UI styling for background and vis-network tooltips
-        custom_style = """
-        <style>
-            html, body {
-                margin: 0 !important;
-                padding: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                min-height: 100% !important;
-                background-color: #15181e !important;
-                overflow: hidden !important;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }
-            center, h1 {
-                display: none !important;
-                margin: 0 !important;
-                padding: 0 !important;
-            }
-            .card {
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-                right: 0 !important;
-                bottom: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                min-height: 100% !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                border: none !important;
-                border-radius: 0 !important;
-                background-color: #15181e !important;
-                box-shadow: none !important;
-            }
-            .card-body {
-                padding: 0 !important;
-                margin: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-            }
-            #mynetwork {
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-                right: 0 !important;
-                bottom: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                background-color: #15181e !important;
-                border: none !important;
-                outline: none !important;
-                box-shadow: none !important;
-                float: none !important;
-            }
-            .vis-network {
-                width: 100% !important;
-                height: 100% !important;
-                outline: none !important;
-                border: none !important;
-            }
-            canvas {
-                outline: none !important;
-                border: none !important;
-            }
-            *:focus {
-                outline: none !important;
-            }
-            div.vis-tooltip {
-                position: absolute !important;
-                background-color: #1a1e27 !important;
-                color: #f1f5f9 !important;
-                border: 1px solid #38bdf8 !important;
-                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75) !important;
-                border-radius: 8px !important;
-                padding: 12px 16px !important;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-                font-size: 12px !important;
-                line-height: 1.6 !important;
-                max-width: 380px !important;
-                white-space: normal !important;
-                word-break: break-word !important;
-                pointer-events: none !important;
-                z-index: 10000 !important;
-            }
-            .mailintel-tooltip-inner {
-                font-size: 12px;
-                line-height: 1.6;
-                color: #cbd5e1;
-            }
-            .mailintel-tooltip-inner b {
-                color: #94a3b8;
-                font-weight: 600;
-            }
-            .mailintel-tooltip-inner .tt-badge {
-                display: inline-block;
-                padding: 2px 7px;
-                border-radius: 4px;
-                font-size: 10px;
-                font-weight: 800;
-                margin-bottom: 6px;
-                letter-spacing: 0.5px;
-            }
-        </style>
-        """
-        html = html.replace("</head>", f"{custom_style}\n</head>")
-        return html
+    # Inject dark UI styling for background and vis-network tooltips
+    custom_style = """
+    <style>
+        html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 100% !important;
+            background-color: #15181e !important;
+            overflow: hidden !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        center, h1 {
+            display: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .card {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background-color: #15181e !important;
+            box-shadow: none !important;
+        }
+        .card-body {
+            padding: 0 !important;
+            margin: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        #mynetwork {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            background-color: #15181e !important;
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            float: none !important;
+        }
+        .vis-network {
+            width: 100% !important;
+            height: 100% !important;
+            outline: none !important;
+            border: none !important;
+        }
+        canvas {
+            outline: none !important;
+            border: none !important;
+        }
+        *:focus {
+            outline: none !important;
+        }
+        div.vis-tooltip {
+            position: absolute !important;
+            background-color: #1a1e27 !important;
+            color: #f1f5f9 !important;
+            border: 1px solid #38bdf8 !important;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75) !important;
+            border-radius: 8px !important;
+            padding: 12px 16px !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            font-size: 12px !important;
+            line-height: 1.6 !important;
+            max-width: 380px !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+            pointer-events: none !important;
+            z-index: 10000 !important;
+        }
+        .mailintel-tooltip-inner {
+            font-size: 12px;
+            line-height: 1.6;
+            color: #cbd5e1;
+        }
+        .mailintel-tooltip-inner b {
+            color: #94a3b8;
+            font-weight: 600;
+        }
+        .mailintel-tooltip-inner .tt-badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: 0.5px;
+        }
+    </style>
+    """
+    html = html.replace("</head>", f"{custom_style}\n</head>")
+    return html

@@ -64,6 +64,19 @@ from core.correlation import (
     CampaignClusterer,
     ThreatGraphBuilder,
 )
+from core.correlation.flows import (
+    COLORS as FLOW_COLORS,
+)
+from core.correlation.flows import (
+    MORE_PREFIX,
+    NO_RECIPIENT,
+    RECIPIENT_PREFIX,
+    SENDER_PREFIX,
+    FlowSummary,
+    build_flow_graph,
+    build_flows,
+    parse_recipient_node_id,
+)
 from core.enrichment.abusech import AbuseCHProvider
 from core.enrichment.abuseipdb import AbuseIPDBProvider
 from core.enrichment.keys import get_api_key, set_api_key
@@ -87,6 +100,16 @@ _DATA_DIR: Path = _PROJECT_ROOT / "data"
 _WHITELIST_PATH: Path = _DATA_DIR / "whitelist.yaml"
 _WEIGHTS_PATH: Path = _DATA_DIR / "scoring_weights.yaml"
 
+
+#: Mails read for the Graph page's mail-flow views (the most recent ones).
+FLOW_MAX_EMAILS: int = 5000
+
+#: Graph page views: (label, key).  "network" is the original entity graph.
+GRAPH_VIEW_CHOICES: list[tuple[str, str]] = [
+    ("IP  →  Recipients", "ip"),
+    ("Domain  →  Recipients", "domain"),
+    ("Full network (old view)", "network"),
+]
 
 #: Maximum mails shown in the mail list (the most recent matches; the label says how many exist).
 MAIL_PAGE_SIZE: int = 500
@@ -1739,9 +1762,9 @@ class DashboardWindow(QMainWindow):
         header_vbox = QVBoxLayout()
         header_vbox.setSpacing(4)
 
-        header = QLabel("Threat Entity Relationship Graph")
-        header.setObjectName("headerTitle")
-        header_vbox.addWidget(header)
+        self.graph_title_label = QLabel("Mail Flow: who sent to whom")
+        self.graph_title_label.setObjectName("headerTitle")
+        header_vbox.addWidget(self.graph_title_label)
 
         # Real node/cluster counts in the header instead of hardcoded text
         self.graph_stats_label = QLabel("Initializing threat correlation engine...")
@@ -1801,9 +1824,34 @@ class DashboardWindow(QMainWindow):
         fb_layout.setContentsMargins(16, 8, 16, 8)
         fb_layout.setSpacing(14)
 
+        view_lbl = QLabel("View:")
+        view_lbl.setStyleSheet("color: #cbd5e1; font-weight: 600; font-size: 12px;")
+        fb_layout.addWidget(view_lbl)
+
+        self.graph_view_combo = QComboBox()
+        for label, key in GRAPH_VIEW_CHOICES:
+            self.graph_view_combo.addItem(label, key)
+        self.graph_view_combo.setFixedHeight(30)
+        self.graph_view_combo.setMinimumWidth(190)
+        self.graph_view_combo.currentIndexChanged.connect(self.on_graph_view_changed)
+        fb_layout.addWidget(self.graph_view_combo)
+
+        self.graph_focus_label = QLabel("Sender:")
+        self.graph_focus_label.setStyleSheet("color: #cbd5e1; font-weight: 600; font-size: 12px;")
+        fb_layout.addWidget(self.graph_focus_label)
+
+        self.graph_focus_combo = QComboBox()
+        self.graph_focus_combo.addItem("All senders", None)
+        self.graph_focus_combo.setFixedHeight(30)
+        self.graph_focus_combo.setMinimumWidth(270)
+        self.graph_focus_combo.setToolTip("Pick one IP / domain to see only its recipients")
+        self.graph_focus_combo.currentIndexChanged.connect(self.on_graph_filter_changed)
+        fb_layout.addWidget(self.graph_focus_combo)
+
         camp_lbl = QLabel("Campaign:")
         camp_lbl.setStyleSheet("color: #cbd5e1; font-weight: 600; font-size: 12px;")
         fb_layout.addWidget(camp_lbl)
+        self.graph_campaign_label = camp_lbl
 
         self.graph_campaign_combo = QComboBox()
         self.graph_campaign_combo.addItem("All Campaigns (Corpus Wide)", "all")
@@ -1812,17 +1860,15 @@ class DashboardWindow(QMainWindow):
         self.graph_campaign_combo.currentIndexChanged.connect(self.on_graph_filter_changed)
         fb_layout.addWidget(self.graph_campaign_combo)
 
-        limit_lbl = QLabel("Limit:")
+        limit_lbl = QLabel("Show:")
         limit_lbl.setStyleSheet("color: #cbd5e1; font-weight: 600; font-size: 12px;")
         fb_layout.addWidget(limit_lbl)
 
+        # Top N senders in the mail-flow views; top N entities in the old network view
         self.graph_limit_combo = QComboBox()
-        self.graph_limit_combo.addItem("Top 50 Entities", 50)
-        self.graph_limit_combo.addItem("Top 100 Entities", 100)
-        self.graph_limit_combo.addItem("Top 150 Entities", 150)
-        self.graph_limit_combo.addItem("Top 250 Entities", 250)
-        self.graph_limit_combo.addItem("Top 500 Entities", 500)
-        self.graph_limit_combo.setCurrentIndex(2)
+        for n in (10, 20, 30, 50, 100):
+            self.graph_limit_combo.addItem(f"Top {n}", n)
+        self.graph_limit_combo.setCurrentIndex(1)
         self.graph_limit_combo.setFixedHeight(30)
         self.graph_limit_combo.currentIndexChanged.connect(self.on_graph_filter_changed)
         fb_layout.addWidget(self.graph_limit_combo)
@@ -1840,10 +1886,23 @@ class DashboardWindow(QMainWindow):
             ("Hash", ENTITY_COLORS["hash"]),
             ("URL", ENTITY_COLORS["url"]),
         ]
+        self._graph_network_legend: list[QLabel] = []
         for name, col in legends:
             dot = QLabel(f"● {name}")
             dot.setStyleSheet(f"color: {col}; font-size: 11px; font-weight: 700; margin-right: 4px;")
             fb_layout.addWidget(dot)
+            self._graph_network_legend.append(dot)
+
+        self.graph_flow_sender_legend = QLabel("● Sending IP")
+        self.graph_flow_sender_legend.setStyleSheet(
+            f"color: {FLOW_COLORS['ip']}; font-size: 11px; font-weight: 700; margin-right: 4px;")
+        flow_recipient_legend = QLabel("● Recipient (number = mails)")
+        flow_recipient_legend.setStyleSheet(
+            f"color: {FLOW_COLORS['recipient']}; font-size: 11px; font-weight: 700; margin-right: 4px;")
+        self._graph_flow_legend: list[QLabel] = [self.graph_flow_sender_legend, flow_recipient_legend]
+        for dot in self._graph_flow_legend:
+            fb_layout.addWidget(dot)
+        self.graph_legend_label = legend_lbl
 
         fb_layout.addStretch()
         layout.addWidget(filter_bar)
@@ -1903,6 +1962,7 @@ class DashboardWindow(QMainWindow):
 
         self.graph_drawer_scroll = QScrollArea()
         self.graph_drawer_scroll.setWidgetResizable(True)
+        self.graph_drawer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.graph_drawer_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.graph_drawer_scroll.setStyleSheet("background: transparent;")
 
@@ -1930,7 +1990,37 @@ class DashboardWindow(QMainWindow):
         self.graph_splitter.setCollapsible(1, True)
 
         layout.addWidget(self.graph_splitter, 1)
+
+        self._flow_summary: FlowSummary | None = None
+        self._flow_mails_stored = 0
+        self._apply_graph_view_controls(self.graph_view_combo.currentData() or "ip")
         return page
+
+    def _graph_mode(self) -> str:
+        return self.graph_view_combo.currentData() or "ip"
+
+    def _apply_graph_view_controls(self, mode: str) -> None:
+        """Show the controls and legend that belong to the selected view."""
+        flow = mode != "network"
+        for widget in (self.graph_focus_label, self.graph_focus_combo, *self._graph_flow_legend):
+            widget.setVisible(flow)
+        for widget in (self.graph_campaign_label, self.graph_campaign_combo, *self._graph_network_legend):
+            widget.setVisible(not flow)
+        if flow:
+            what = "IP" if mode == "ip" else "domain"
+            self.graph_title_label.setText(f"Mail Flow: sending {what} → recipients")
+            self.graph_flow_sender_legend.setText(f"● Sending {what}")
+            self.graph_flow_sender_legend.setStyleSheet(
+                f"color: {FLOW_COLORS[mode]}; font-size: 11px; font-weight: 700; margin-right: 4px;")
+            self.graph_refresh_btn.setText("↻ Refresh")
+        else:
+            self.graph_title_label.setText("Threat Entity Relationship Graph")
+            self.graph_refresh_btn.setText("↻ Refresh Correlation")
+
+    def on_graph_view_changed(self) -> None:
+        """Switching between IP / Domain / network view rebuilds the graph."""
+        self._apply_graph_view_controls(self._graph_mode())
+        self.load_graph_data()
 
     def toggle_graph_full_page(self) -> None:
         """Toggle graph drawer visibility to allow full-width / full-page graph inspection."""
@@ -1973,6 +2063,44 @@ class DashboardWindow(QMainWindow):
             self.on_graph_node_deselected()
 
     def load_graph_data(self) -> None:
+        """Load the data of the selected Graph view and draw it."""
+        mode = self._graph_mode()
+        self._apply_graph_view_controls(mode)
+        if mode == "network":
+            self._load_network_graph()
+            return
+
+        db = self.get_db()
+        try:
+            emails = db.search_emails(limit=FLOW_MAX_EMAILS)
+            if not emails:
+                self._flow_summary = None
+                self.graph_stats_label.setText("No emails ingested in database yet.")
+                return
+            self._flow_summary = build_flows(emails, mode)
+            self._flow_mails_stored = db.get_email_count()
+        finally:
+            db.close()
+        self._fill_graph_focus_combo()
+        self._render_active_graph()
+
+    def _fill_graph_focus_combo(self) -> None:
+        """List the busiest senders in the "Sender" box (keeps the current choice if possible)."""
+        summary = self._flow_summary
+        previous = self.graph_focus_combo.currentData()
+        self.graph_focus_combo.blockSignals(True)
+        self.graph_focus_combo.clear()
+        what = "IPs" if summary is not None and summary.mode == "ip" else "domains"
+        self.graph_focus_combo.addItem(f"All sending {what} (top N)", None)
+        if summary is not None:
+            for flow in summary.top(300):
+                self.graph_focus_combo.addItem(
+                    f"{flow.key}   ({flow.mail_count} mails → {flow.recipient_count} recipients)", flow.key)
+        index = self.graph_focus_combo.findData(previous) if previous else 0
+        self.graph_focus_combo.setCurrentIndex(max(0, index))
+        self.graph_focus_combo.blockSignals(False)
+
+    def _load_network_graph(self) -> None:
         """Fetch ingested email and IOC data from SQLite, cluster into campaigns, and render graph."""
         db = self.get_db()
         try:
@@ -2006,7 +2134,10 @@ class DashboardWindow(QMainWindow):
             db.close()
 
     def _render_active_graph(self) -> None:
-        """Construct the NetworkX graph and render HTML inside QWebEngineView."""
+        """Draw the selected view (mail flow or the old entity network)."""
+        if self._graph_mode() != "network":
+            self._render_flow_graph()
+            return
         if not hasattr(self, "_cached_emails"):
             return
 
@@ -2048,8 +2179,35 @@ class DashboardWindow(QMainWindow):
             f"{type_counts['hash']} Hashes, {type_counts['url']} URLs)"
         )
 
-        # Generate Pyvis HTML and render in QWebEngineView
-        html = self.graph_builder.generate_html()
+        self._show_graph_html(self.graph_builder.generate_html())
+
+    def _render_flow_graph(self) -> None:
+        """Senders (left) → recipients (right), arrow label = number of mails."""
+        summary = self._flow_summary
+        if summary is None:
+            return
+        focus = self.graph_focus_combo.currentData()
+        top_n = int(self.graph_limit_combo.currentData() or 20)
+        graph = build_flow_graph(summary, top_n=top_n, focus=focus)
+        what = "sending IP" if summary.mode == "ip" else "From domain"
+
+        if focus:
+            flow = summary.sender(focus)
+            text = (f"{focus}: {flow.mail_count} mails → {flow.recipient_count} recipients"
+                    if flow else f"{focus}: no mails")
+        else:
+            mails = sum(f.mail_count for f in graph.senders)
+            text = (f"Top {len(graph.senders)} of {len(summary.senders)} {what}s • "
+                    f"{mails:,} mails • {graph.recipient_count} recipients shown")
+        text += f"   |   {summary.mails_without_sender:,} of {summary.mails_total:,} mails have no {what}"
+        if self._flow_mails_stored > summary.mails_total:
+            text += f" (latest {summary.mails_total:,} of {self._flow_mails_stored:,} stored mails)"
+        self.graph_stats_label.setText(text)
+
+        self._show_graph_html(graph.to_html())
+
+    def _show_graph_html(self, html: str) -> None:
+        """Show graph HTML in the locked-down web page and reset the details panel."""
         self._ensure_graph_web_view()
         if self.graph_web_view is not None and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             # The graph HTML holds attacker-controlled text, so render it in a
@@ -2069,6 +2227,9 @@ class DashboardWindow(QMainWindow):
 
     def on_graph_node_clicked(self, node_id: str) -> None:
         """Populate the details drawer when a user clicks any node in the pyvis graph."""
+        if node_id.startswith((SENDER_PREFIX, RECIPIENT_PREFIX, MORE_PREFIX)):
+            self._show_flow_details(node_id)
+            return
         details = self.graph_builder.get_node_details(node_id)
         if not details:
             return
@@ -2275,13 +2436,131 @@ class DashboardWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
 
-        self.graph_drawer_empty = QLabel(
-            "Click any node in the graph (email, sender, IP, domain, hash, or URL) "
-            "to inspect risk scoring breakdown, multi-signal correlations, and linked infrastructure."
-        )
+        if self._graph_mode() != "network":
+            what = "IP" if self._graph_mode() == "ip" else "domain"
+            hint = (f"Click a sending {what} (left) to see every address it mailed and how many mails each "
+                    f"got, plus the mails themselves. Click a recipient (right) to see who mailed it.")
+        else:
+            hint = ("Click any node in the graph (email, sender, IP, domain, hash, or URL) "
+                    "to inspect risk scoring breakdown, multi-signal correlations, and linked infrastructure.")
+        self.graph_drawer_empty = QLabel(hint)
         self.graph_drawer_empty.setStyleSheet("color: #64748b; font-size: 13px; line-height: 1.5;")
         self.graph_drawer_empty.setWordWrap(True)
         self.graph_drawer_vbox.addWidget(self.graph_drawer_empty)
+        self.graph_drawer_vbox.addStretch()
+
+    def _clear_graph_drawer(self) -> None:
+        while self.graph_drawer_vbox.count():
+            item = self.graph_drawer_vbox.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def _flow_table(self, headers: list[str], rows: list[tuple[str, str]], max_height: int = 320) -> QTableWidget:
+        """Read-only two-column table (plain text cells, safe for mail-supplied text)."""
+        table = QTableWidget(len(rows), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.TextElideMode.ElideMiddle)        # keep the domain part visible
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        for r, (left, right) in enumerate(rows):
+            item = QTableWidgetItem(left)
+            item.setToolTip(left)
+            table.setItem(r, 0, item)
+            count = QTableWidgetItem(right)
+            count.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(r, 1, count)
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.setMinimumHeight(min(max_height, 34 + 28 * max(1, len(rows))))
+        table.setMaximumHeight(max_height)
+        return table
+
+    def _flow_heading(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 700;")
+        return label
+
+    def _show_flow_details(self, node_id: str) -> None:
+        """Details panel for a sender (recipients + mails) or a recipient (who mailed it)."""
+        summary = self._flow_summary
+        if summary is None:
+            return
+        if not self.graph_drawer.isVisible():
+            self.set_graph_drawer_visible(True)
+        self._clear_graph_drawer()
+        what = "IP" if summary.mode == "ip" else "domain"
+
+        if node_id.startswith(RECIPIENT_PREFIX):
+            _sender, address = parse_recipient_node_id(node_id)
+            pairs = summary.senders_for_recipient(address)
+            total = sum(n for _, n in pairs)
+            badge = self._flow_heading("RECIPIENT")
+            badge.setStyleSheet(f"color: {FLOW_COLORS['recipient']}; font-size: 11px; font-weight: 800;")
+            self.graph_drawer_vbox.addWidget(badge)
+            value = QLabel(address)
+            value.setTextFormat(Qt.TextFormat.PlainText)
+            value.setWordWrap(True)
+            value.setStyleSheet("color: #f1f5f9; font-size: 14px; font-weight: 800;")
+            self.graph_drawer_vbox.addWidget(value)
+            self.graph_drawer_vbox.addWidget(self._flow_heading(
+                f"Received {total} mail(s) from {len(pairs)} sending {what}(s)"))
+            self.graph_drawer_vbox.addWidget(self._flow_table(
+                [f"Sending {what}", "Mails"], [(k, str(n)) for k, n in pairs]))
+            self.graph_drawer_vbox.addStretch()
+            return
+
+        key = node_id.split(":", 1)[1]
+        flow = summary.sender(key)
+        if flow is None:
+            return
+        badge = self._flow_heading(f"SENDING {what.upper()}")
+        badge.setStyleSheet(f"color: {FLOW_COLORS[summary.mode]}; font-size: 11px; font-weight: 800;")
+        self.graph_drawer_vbox.addWidget(badge)
+        value = QLabel(flow.key)
+        value.setTextFormat(Qt.TextFormat.PlainText)
+        value.setWordWrap(True)
+        value.setStyleSheet("color: #f1f5f9; font-size: 15px; font-weight: 800; font-family: Consolas, monospace;")
+        self.graph_drawer_vbox.addWidget(value)
+        self.graph_drawer_vbox.addWidget(self._flow_heading(
+            f"{flow.mail_count} mail(s) sent to {flow.recipient_count} recipient(s)"))
+
+        buttons = QHBoxLayout()
+        copy_btn = QPushButton("📋 Copy")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(flow.key))
+        defang_btn = QPushButton("🛡️ Copy defanged")
+        defang_btn.clicked.connect(lambda: QApplication.clipboard().setText(defang(flow.key)))
+        buttons.addWidget(copy_btn)
+        buttons.addWidget(defang_btn)
+        self.graph_drawer_vbox.addLayout(buttons)
+        if self.graph_focus_combo.currentData() != flow.key:
+            only_btn = QPushButton(f"🔍 Show only this {what} and its recipients")
+            only_btn.clicked.connect(
+                lambda: self.graph_focus_combo.setCurrentIndex(max(0, self.graph_focus_combo.findData(flow.key))))
+            self.graph_drawer_vbox.addWidget(only_btn)
+
+        self.graph_drawer_vbox.addWidget(self._flow_heading("RECIPIENTS (most mails first)"))
+        self.graph_drawer_vbox.addWidget(self._flow_table(
+            ["Recipient address", "Mails"],
+            [(addr, str(n)) for addr, n in flow.ranked_recipients()]))
+        if flow.recipients.get(NO_RECIPIENT):
+            note = QLabel(f"\"{NO_RECIPIENT}\" = mails whose To/Cc show no address (e.g. undisclosed recipients).")
+            note.setTextFormat(Qt.TextFormat.PlainText)
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #64748b; font-size: 10px;")
+            self.graph_drawer_vbox.addWidget(note)
+
+        self.graph_drawer_vbox.addWidget(self._flow_heading(f"MAILS ({flow.mail_count})"))
+        self.graph_drawer_vbox.addWidget(self._flow_table(
+            ["Subject", "Date"],
+            [(m.subject or m.filename or "(no subject)", m.date[:31]) for m in flow.mails[:300]],
+            max_height=360))
         self.graph_drawer_vbox.addStretch()
 
     def on_graph_filter_changed(self) -> None:

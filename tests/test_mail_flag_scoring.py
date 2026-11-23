@@ -156,6 +156,8 @@ class TestStoredMailScore:
     def test_graph_node_uses_the_same_flags(self, seeded: Path, qtbot) -> None:
         window = DashboardWindow(db_path=seeded)
         qtbot.addWidget(window)
+        # these checks are about the old entity-network view (no longer the default)
+        window.graph_view_combo.setCurrentIndex(window.graph_view_combo.findData("network"))
         window.select_nav_button(2)
         scores = {d["label"]: d["risk_score"] for _, d in window.graph_builder.graph.nodes(data=True)
                   if d.get("entity_type") == "email"}
